@@ -64,7 +64,7 @@ PYTHONPATH=src ./.venv/bin/ruff check . && PYTHONPATH=src ./.venv/bin/pytest -q
 
 ---
 
-## Task 3 — Dataset Download + Prep (WikiText-2)
+## Task 3 — Dataset Download + Prep (WikiText-2) [done]
 **Goal:** Get reproducible local dataset pipeline.
 
 ### Deliverables

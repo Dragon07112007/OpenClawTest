@@ -20,6 +20,15 @@ def test_command_stubs_print_device_info(command: str, monkeypatch, capsys) -> N
 
 def test_train_command_creates_run_metadata(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(cli, "get_device", lambda: "cpu")
+    monkeypatch.setattr(
+        cli,
+        "prepare_wikitext2",
+        lambda **kwargs: type(
+            "PrepResult",
+            (),
+            {"dataset_name": "wikitext-2", "train_samples": 2, "validation_samples": 1},
+        )(),
+    )
     monkeypatch.chdir(tmp_path)
 
     rc = cli.main(["train", "--config", "configs/default.toml"])

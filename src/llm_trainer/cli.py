@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from .data import prepare_wikitext2
 from .device import get_device
 from .run_metadata import initialize_run
 
@@ -39,10 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_train(args: argparse.Namespace) -> int:
     device = get_device()
+    data_result = prepare_wikitext2(data_root="data")
     run_files = initialize_run(config_path=args.config, device=device)
     print(
-        "train command stub "
-        f"(config={args.config}, device={device}, run_id={run_files.run_id})"
+        "train command "
+        f"(config={args.config}, device={device}, run_id={run_files.run_id}, "
+        f"dataset={data_result.dataset_name}, train_samples={data_result.train_samples}, "
+        f"validation_samples={data_result.validation_samples})"
     )
     return 0
 
