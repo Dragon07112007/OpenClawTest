@@ -3,3 +3,13 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.pyc
+
+# Training/runtime artifacts
+checkpoints/**
+!checkpoints/.gitkeep
+data/wikitext-2/
+runs/**
+!runs/.gitkeep
+
+# Packaging metadata
+*.egg-info/
