@@ -64,6 +64,14 @@ def load_state(state_path: str | Path) -> dict[str, Any]:
     return json.loads(Path(state_path).read_text(encoding="utf-8"))
 
 
+def load_meta(meta_path: str | Path) -> dict[str, Any]:
+    return json.loads(Path(meta_path).read_text(encoding="utf-8"))
+
+
+def write_meta(meta_path: str | Path, meta: dict[str, Any]) -> None:
+    Path(meta_path).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+
+
 def write_state(state_path: str | Path, state: dict[str, Any]) -> None:
     Path(state_path).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
@@ -87,3 +95,10 @@ def update_run_state(
     state["updated_at"] = updated_at
     write_state(state_path, state)
     return state
+
+
+def update_run_meta(*, meta_path: str | Path, updates: dict[str, Any]) -> dict[str, Any]:
+    meta = load_meta(meta_path)
+    meta.update(updates)
+    write_meta(meta_path, meta)
+    return meta

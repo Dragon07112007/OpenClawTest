@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
+from .background import pid_is_alive, start_background_training
 from .config import load_config
 from .data import prepare_wikitext2
 from .dataloader import SequenceDataLoader, load_token_ids, tokenize_wikitext2
 from .device import get_device
-from .run_metadata import initialize_run
+from .run_metadata import (
+    RunFiles,
+    initialize_run,
+    load_meta,
+    load_state,
+    update_run_meta,
+    update_run_state,
+)
 
 
 def _add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -17,16 +26,39 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _resolve_run_dir(run_id: str | None, runs_root: Path = Path("runs")) -> Path:
+    if run_id is not None:
+        run_dir = runs_root / run_id
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run ID not found: {run_id}")
+        return run_dir
+
+    run_dirs = [p for p in runs_root.iterdir() if p.is_dir()] if runs_root.exists() else []
+    if not run_dirs:
+        raise FileNotFoundError("No runs found.")
+    return sorted(run_dirs, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm-trainer", description="LLM trainer CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     train_parser = subparsers.add_parser("train", help="Start a training run.")
     _add_common_options(train_parser)
+    train_parser.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Run training in the foreground instead of detached background mode.",
+    )
     train_parser.set_defaults(func=cmd_train)
 
     status_parser = subparsers.add_parser("status", help="Show training status.")
     _add_common_options(status_parser)
+    status_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run ID to inspect. Latest if omitted.",
+    )
     status_parser.set_defaults(func=cmd_status)
 
     resume_parser = subparsers.add_parser("resume", help="Resume a training run.")
@@ -36,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser = subparsers.add_parser("generate", help="Generate text from a checkpoint.")
     _add_common_options(generate_parser)
     generate_parser.set_defaults(func=cmd_generate)
+
+    worker_parser = subparsers.add_parser("train-worker", help=argparse.SUPPRESS)
+    _add_common_options(worker_parser)
+    worker_parser.add_argument("--run-id", required=True)
+    worker_parser.set_defaults(func=cmd_train_worker)
 
     return parser
 
@@ -56,23 +93,26 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     preview_batch = next(iter(dataloader), None)
     run_files = initialize_run(config_path=args.config, device=device)
-    training_status = "skipped"
-    try:
-        from .trainer import train_loop
-    except ModuleNotFoundError:
-        training_status = "torch-missing"
+    update_run_meta(
+        meta_path=run_files.meta_path,
+        updates={
+            "tokenized_train_path": str(tokenized.train_ids_path),
+            "tokenized_validation_path": str(tokenized.validation_ids_path),
+            "tokenizer_path": str(tokenized.tokenizer_path),
+            "dataset": data_result.dataset_name,
+        },
+    )
+    if args.foreground:
+        worker_args = argparse.Namespace(config=args.config, run_id=run_files.run_id)
+        cmd_train_worker(worker_args)
+        training_status = "foreground"
     else:
-        metrics = train_loop(
-            config=config,
-            run_files=run_files,
-            tokenized_train_path=tokenized.train_ids_path,
-            tokenized_validation_path=tokenized.validation_ids_path,
-            tokenizer_path=tokenized.tokenizer_path,
+        pid = start_background_training(
+            run_dir=run_files.run_dir,
+            run_id=run_files.run_id,
+            config_path=args.config,
         )
-        training_status = (
-            f"completed(epoch={metrics['epoch']}, step={metrics['global_step']}, "
-            f"val_loss={metrics['val_loss']})"
-        )
+        training_status = f"background(pid={pid})"
     print(
         "train command "
         f"(config={args.config}, device={device}, run_id={run_files.run_id}, "
@@ -85,9 +125,60 @@ def cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+def cmd_train_worker(args: argparse.Namespace) -> int:
+    run_dir = Path("runs") / args.run_id
+    meta = load_meta(run_dir / "meta.json")
     device = get_device()
-    print(f"status command stub (config={args.config}, device={device})")
+    config = load_config(args.config)
+    config["runtime"] = {"device": device}
+
+    update_run_state(
+        state_path=run_dir / "state.json",
+        status="running",
+        metrics={"device": device},
+    )
+    try:
+        from .trainer import train_loop
+    except ModuleNotFoundError as exc:
+        update_run_state(
+            state_path=run_dir / "state.json",
+            status="failed",
+            metrics={"error": f"Missing dependency: {exc}"},
+        )
+        return 1
+
+    train_loop(
+        config=config,
+        run_files=RunFiles(
+            run_id=args.run_id,
+            run_dir=run_dir,
+            meta_path=run_dir / "meta.json",
+            state_path=run_dir / "state.json",
+        ),
+        tokenized_train_path=meta["tokenized_train_path"],
+        tokenized_validation_path=meta["tokenized_validation_path"],
+        tokenizer_path=meta["tokenizer_path"],
+    )
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    run_dir = _resolve_run_dir(args.run_id)
+    meta = load_meta(run_dir / "meta.json")
+    state = load_state(run_dir / "state.json")
+
+    pid = state.get("pid")
+    if isinstance(pid, int):
+        process_state = "alive" if pid_is_alive(pid) else "not-running"
+    else:
+        process_state = "n/a"
+    print(
+        "status "
+        f"(run_id={meta['run_id']}, status={state.get('status')}, "
+        f"epoch={state.get('epoch')}, step={state.get('global_step')}, "
+        f"train_loss={state.get('train_loss')}, val_loss={state.get('val_loss')}, "
+        f"device={meta.get('device')}, pid={pid}, process={process_state})"
+    )
     return 0
 
 

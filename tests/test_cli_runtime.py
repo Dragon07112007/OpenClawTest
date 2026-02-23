@@ -8,7 +8,7 @@ import pytest
 from llm_trainer import cli
 
 
-@pytest.mark.parametrize("command", ["status", "resume", "generate"])
+@pytest.mark.parametrize("command", ["resume", "generate"])
 def test_command_stubs_print_device_info(command: str, monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "get_device", lambda: "cpu")
 
@@ -56,6 +56,7 @@ def test_train_command_creates_run_metadata(monkeypatch, tmp_path, capsys) -> No
             },
         )(),
     )
+    monkeypatch.setattr(cli, "start_background_training", lambda **kwargs: 4321)
     monkeypatch.chdir(tmp_path)
 
     rc = cli.main(["train", "--config", "configs/default.toml"])
@@ -74,3 +75,25 @@ def test_train_command_creates_run_metadata(monkeypatch, tmp_path, capsys) -> No
     assert meta["device"] == "cpu"
     assert meta["config_path"] == "configs/default.toml"
     assert state["status"] == "queued"
+
+
+def test_status_command_reads_latest_run(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    run = (tmp_path / "runs" / "run-1")
+    run.mkdir(parents=True)
+    (run / "meta.json").write_text(
+        json.dumps({"run_id": "run-1", "device": "cpu", "config_path": "configs/default.toml"}),
+        encoding="utf-8",
+    )
+    (run / "state.json").write_text(
+        json.dumps({"status": "running", "global_step": 3, "train_loss": 1.0, "val_loss": 1.5}),
+        encoding="utf-8",
+    )
+
+    rc = cli.main(["status", "--config", "configs/default.toml"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "run_id=run-1" in out
+    assert "status=running" in out
+    assert "device=cpu" in out

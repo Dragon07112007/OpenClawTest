@@ -130,7 +130,7 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
-## Task 7 — Background Training + Status Command
+## Task 7 — Background Training + Status Command [done]
 **Goal:** Run training detached and inspect live progress.
 
 ### Deliverables
