@@ -148,7 +148,7 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
-## Task 8 — Resume / Continue for N More Epochs
+## Task 8 — Resume / Continue for N More Epochs [done]
 **Goal:** Continue from a checkpoint safely.
 
 ### Deliverables

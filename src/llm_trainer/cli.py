@@ -63,6 +63,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume_parser = subparsers.add_parser("resume", help="Resume a training run.")
     _add_common_options(resume_parser)
+    resume_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run ID to resume. Latest if omitted.",
+    )
+    resume_parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint path. Defaults to latest.",
+    )
+    resume_parser.add_argument("--more-epochs", type=int, required=True)
+    resume_parser.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Run resume in the foreground instead of detached background mode.",
+    )
     resume_parser.set_defaults(func=cmd_resume)
 
     generate_parser = subparsers.add_parser("generate", help="Generate text from a checkpoint.")
@@ -72,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     worker_parser = subparsers.add_parser("train-worker", help=argparse.SUPPRESS)
     _add_common_options(worker_parser)
     worker_parser.add_argument("--run-id", required=True)
+    worker_parser.add_argument("--checkpoint", default=None)
+    worker_parser.add_argument("--more-epochs", type=int, default=None)
     worker_parser.set_defaults(func=cmd_train_worker)
 
     return parser
@@ -147,6 +165,22 @@ def cmd_train_worker(args: argparse.Namespace) -> int:
         )
         return 1
 
+    start_epoch = 0
+    total_epochs = int(config["training"]["epochs"])
+    optimizer_state = None
+    model_state = None
+    global_step = 0
+    if args.checkpoint is not None:
+        torch = __import__("torch")
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        start_epoch = int(checkpoint.get("epoch", 0))
+        global_step = int(checkpoint.get("global_step", 0))
+        optimizer_state = checkpoint.get("optimizer_state_dict")
+        model_state = checkpoint.get("model_state_dict")
+        if args.more_epochs is None:
+            raise ValueError("--more-epochs is required when --checkpoint is provided.")
+        total_epochs = start_epoch + int(args.more_epochs)
+
     train_loop(
         config=config,
         run_files=RunFiles(
@@ -158,6 +192,11 @@ def cmd_train_worker(args: argparse.Namespace) -> int:
         tokenized_train_path=meta["tokenized_train_path"],
         tokenized_validation_path=meta["tokenized_validation_path"],
         tokenizer_path=meta["tokenizer_path"],
+        start_epoch=start_epoch,
+        total_epochs=total_epochs,
+        optimizer_state=optimizer_state,
+        model_state=model_state,
+        global_step=global_step,
     )
     return 0
 
@@ -183,8 +222,37 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    device = get_device()
-    print(f"resume command stub (config={args.config}, device={device})")
+    run_dir = _resolve_run_dir(args.run_id)
+    run_id = run_dir.name
+    checkpoint_path = args.checkpoint or str(Path("checkpoints") / run_id / "latest.pt")
+    update_run_state(
+        state_path=run_dir / "state.json",
+        status="queued",
+        metrics={"resume_checkpoint": checkpoint_path, "resume_more_epochs": args.more_epochs},
+    )
+    if args.foreground:
+        worker_args = argparse.Namespace(
+            config=args.config,
+            run_id=run_id,
+            checkpoint=checkpoint_path,
+            more_epochs=args.more_epochs,
+        )
+        cmd_train_worker(worker_args)
+        mode = "foreground"
+    else:
+        pid = start_background_training(
+            run_dir=run_dir,
+            run_id=run_id,
+            config_path=args.config,
+            checkpoint_path=checkpoint_path,
+            more_epochs=args.more_epochs,
+        )
+        mode = f"background(pid={pid})"
+    print(
+        "resume command "
+        f"(config={args.config}, run_id={run_id}, checkpoint={checkpoint_path}, "
+        f"more_epochs={args.more_epochs}, mode={mode})"
+    )
     return 0
 
 

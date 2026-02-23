@@ -54,6 +54,7 @@ def train_loop(
     start_epoch: int = 0,
     total_epochs: int | None = None,
     optimizer_state: dict[str, Any] | None = None,
+    model_state: dict[str, Any] | None = None,
     global_step: int = 0,
 ) -> dict[str, Any]:
     torch = _torch()
@@ -94,6 +95,8 @@ def train_loop(
         d_ff=int(model_cfg["d_ff"]),
         max_seq_length=seq_length,
     ).to(device)
+    if model_state is not None:
+        model.load_state_dict(model_state)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     if optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)
@@ -168,4 +171,3 @@ def train_loop(
         "train_loss": latest_loss,
         "val_loss": latest_val_loss,
     }
-

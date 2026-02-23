@@ -3,20 +3,49 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from llm_trainer import cli
 
 
-@pytest.mark.parametrize("command", ["resume", "generate"])
-def test_command_stubs_print_device_info(command: str, monkeypatch, capsys) -> None:
+def test_generate_stub_prints_device_info(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "get_device", lambda: "cpu")
 
-    rc = cli.main([command, "--config", "configs/default.toml"])
+    rc = cli.main(["generate", "--config", "configs/default.toml"])
 
     assert rc == 0
     out = capsys.readouterr().out
     assert "device=cpu" in out
+
+
+def test_resume_command_starts_background(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    run = (tmp_path / "runs" / "run-1")
+    run.mkdir(parents=True)
+    (run / "meta.json").write_text(
+        json.dumps({"run_id": "run-1", "device": "cpu", "config_path": "configs/default.toml"}),
+        encoding="utf-8",
+    )
+    (run / "state.json").write_text(
+        json.dumps({"status": "queued", "history": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "start_background_training", lambda **kwargs: 999)
+
+    rc = cli.main(
+        [
+            "resume",
+            "--config",
+            "configs/default.toml",
+            "--run-id",
+            "run-1",
+            "--more-epochs",
+            "2",
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "run_id=run-1" in out
+    assert "more_epochs=2" in out
 
 
 def test_train_command_creates_run_metadata(monkeypatch, tmp_path, capsys) -> None:
