@@ -102,6 +102,10 @@ def build_parser() -> argparse.ArgumentParser:
     worker_parser.add_argument("--more-epochs", type=int, default=None)
     worker_parser.set_defaults(func=cmd_train_worker)
 
+    tui_parser = subparsers.add_parser("tui", help="Launch live monitoring TUI.")
+    tui_parser.add_argument("--run-id", default=None, help="Watch a specific run.")
+    tui_parser.set_defaults(func=cmd_tui)
+
     return parser
 
 
@@ -289,6 +293,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
         f"(device={device}, checkpoint={checkpoint_path}, prompt={args.prompt!r})\n{text}"
     )
     return 0
+
+
+def cmd_tui(args: argparse.Namespace) -> int:
+    from .tui import launch_tui
+
+    return launch_tui(run_id=args.run_id)
 
 
 def main(argv: list[str] | None = None) -> int:

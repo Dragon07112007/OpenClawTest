@@ -140,3 +140,10 @@ def test_status_command_reads_latest_run(monkeypatch, tmp_path, capsys) -> None:
     assert "run_id=run-1" in out
     assert "status=running" in out
     assert "device=cpu" in out
+
+
+def test_tui_command_handles_missing_textual(capsys) -> None:
+    rc = cli.main(["tui"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "missing dependency: textual" in out

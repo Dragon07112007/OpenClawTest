@@ -180,7 +180,7 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
-## Task 10 — Textual TUI (Live Monitor)
+## Task 10 — Textual TUI (Live Monitor) [done]
 **Goal:** Terminal UI for training and monitoring.
 
 ### Deliverables

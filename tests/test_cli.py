@@ -10,7 +10,7 @@ def test_cli_root_help() -> None:
     assert exc.value.code == 0
 
 
-@pytest.mark.parametrize("command", ["train", "status", "resume", "generate"])
+@pytest.mark.parametrize("command", ["train", "status", "resume", "generate", "tui"])
 def test_cli_command_help(command: str) -> None:
     parser = build_parser()
     with pytest.raises(SystemExit) as exc:
