@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 
+from .device import get_device
+from .run_metadata import initialize_run
+
 
 def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
@@ -35,22 +38,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_train(args: argparse.Namespace) -> int:
-    print(f"train command stub (config={args.config})")
+    device = get_device()
+    run_files = initialize_run(config_path=args.config, device=device)
+    print(
+        "train command stub "
+        f"(config={args.config}, device={device}, run_id={run_files.run_id})"
+    )
     return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    print(f"status command stub (config={args.config})")
+    device = get_device()
+    print(f"status command stub (config={args.config}, device={device})")
     return 0
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    print(f"resume command stub (config={args.config})")
+    device = get_device()
+    print(f"resume command stub (config={args.config}, device={device})")
     return 0
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    print(f"generate command stub (config={args.config})")
+    device = get_device()
+    print(f"generate command stub (config={args.config}, device={device})")
     return 0
 
 
