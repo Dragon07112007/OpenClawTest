@@ -10,6 +10,7 @@ batch_size = 16
 seq_length = 256
 learning_rate = 0.0003
 epochs = 3
+seed = 42
 
 [data]
 dataset_name = "wikitext-2"

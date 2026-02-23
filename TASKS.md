@@ -79,7 +79,7 @@ PYTHONPATH=src ./.venv/bin/ruff check . && PYTHONPATH=src ./.venv/bin/pytest -q
 
 ---
 
-## Task 4 — Tokenization + DataLoader
+## Task 4 — Tokenization + DataLoader [done]
 **Goal:** Convert text to model-ready batches.
 
 ### Decision

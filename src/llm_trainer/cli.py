@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 
+from .config import load_config
 from .data import prepare_wikitext2
+from .dataloader import SequenceDataLoader, load_token_ids, tokenize_wikitext2
 from .device import get_device
 from .run_metadata import initialize_run
 
@@ -39,14 +41,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_train(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
     device = get_device()
     data_result = prepare_wikitext2(data_root="data")
+    tokenized = tokenize_wikitext2(data_root="data", seed=config["training"].get("seed", 42))
+    train_ids = load_token_ids(tokenized.train_ids_path)
+    dataloader = SequenceDataLoader(
+        train_ids,
+        seq_length=int(config["training"]["seq_length"]),
+        batch_size=int(config["training"]["batch_size"]),
+        shuffle=True,
+        seed=int(config["training"].get("seed", 42)),
+    )
+    preview_batch = next(iter(dataloader), None)
     run_files = initialize_run(config_path=args.config, device=device)
     print(
         "train command "
         f"(config={args.config}, device={device}, run_id={run_files.run_id}, "
         f"dataset={data_result.dataset_name}, train_samples={data_result.train_samples}, "
-        f"validation_samples={data_result.validation_samples})"
+        f"validation_samples={data_result.validation_samples}, "
+        f"train_tokens={tokenized.train_tokens}, "
+        f"batch_shape={preview_batch.shape if preview_batch else (0, 0)})"
     )
     return 0
 
