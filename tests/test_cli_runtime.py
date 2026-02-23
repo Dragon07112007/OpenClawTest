@@ -36,15 +36,24 @@ def test_train_command_creates_run_metadata(monkeypatch, tmp_path, capsys) -> No
         )(),
     )
     train_ids_path = tmp_path / "data" / "wikitext-2" / "tokenized" / "train_ids.json"
+    validation_ids_path = tmp_path / "data" / "wikitext-2" / "tokenized" / "validation_ids.json"
+    tokenizer_path = tmp_path / "data" / "wikitext-2" / "tokenized" / "tokenizer.json"
     train_ids_path.parent.mkdir(parents=True, exist_ok=True)
     train_ids_path.write_text("[1,2,3,4,5,6]", encoding="utf-8")
+    validation_ids_path.write_text("[1,2,3,4,5,6]", encoding="utf-8")
+    tokenizer_path.write_text('{"vocab":{"<pad>":0,"<unk>":1,"a":2}}', encoding="utf-8")
     monkeypatch.setattr(
         cli,
         "tokenize_wikitext2",
         lambda **kwargs: type(
             "TokenizedResult",
             (),
-            {"train_ids_path": Path("data/wikitext-2/tokenized/train_ids.json"), "train_tokens": 6},
+            {
+                "train_ids_path": Path("data/wikitext-2/tokenized/train_ids.json"),
+                "validation_ids_path": Path("data/wikitext-2/tokenized/validation_ids.json"),
+                "tokenizer_path": Path("data/wikitext-2/tokenized/tokenizer.json"),
+                "train_tokens": 6,
+            },
         )(),
     )
     monkeypatch.chdir(tmp_path)

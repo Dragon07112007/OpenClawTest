@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_train(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     device = get_device()
+    config["runtime"] = {"device": device}
     data_result = prepare_wikitext2(data_root="data")
     tokenized = tokenize_wikitext2(data_root="data", seed=config["training"].get("seed", 42))
     train_ids = load_token_ids(tokenized.train_ids_path)
@@ -55,13 +56,31 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     preview_batch = next(iter(dataloader), None)
     run_files = initialize_run(config_path=args.config, device=device)
+    training_status = "skipped"
+    try:
+        from .trainer import train_loop
+    except ModuleNotFoundError:
+        training_status = "torch-missing"
+    else:
+        metrics = train_loop(
+            config=config,
+            run_files=run_files,
+            tokenized_train_path=tokenized.train_ids_path,
+            tokenized_validation_path=tokenized.validation_ids_path,
+            tokenizer_path=tokenized.tokenizer_path,
+        )
+        training_status = (
+            f"completed(epoch={metrics['epoch']}, step={metrics['global_step']}, "
+            f"val_loss={metrics['val_loss']})"
+        )
     print(
         "train command "
         f"(config={args.config}, device={device}, run_id={run_files.run_id}, "
         f"dataset={data_result.dataset_name}, train_samples={data_result.train_samples}, "
         f"validation_samples={data_result.validation_samples}, "
         f"train_tokens={tokenized.train_tokens}, "
-        f"batch_shape={preview_batch.shape if preview_batch else (0, 0)})"
+        f"batch_shape={preview_batch.shape if preview_batch else (0, 0)}, "
+        f"training={training_status})"
     )
     return 0
 

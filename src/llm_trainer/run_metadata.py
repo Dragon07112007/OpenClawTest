@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 
@@ -57,3 +58,32 @@ def initialize_run(
     state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
     return RunFiles(run_id=run_id, run_dir=run_dir, meta_path=meta_path, state_path=state_path)
+
+
+def load_state(state_path: str | Path) -> dict[str, Any]:
+    return json.loads(Path(state_path).read_text(encoding="utf-8"))
+
+
+def write_state(state_path: str | Path, state: dict[str, Any]) -> None:
+    Path(state_path).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def update_run_state(
+    *,
+    state_path: str | Path,
+    status: str | None = None,
+    metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    state = load_state(state_path)
+    updated_at = _utc_now_iso()
+
+    if status is not None and state.get("status") != status:
+        history = state.setdefault("history", [])
+        history.append({"status": status, "timestamp": updated_at})
+        state["status"] = status
+    if metrics:
+        state.update(metrics)
+
+    state["updated_at"] = updated_at
+    write_state(state_path, state)
+    return state

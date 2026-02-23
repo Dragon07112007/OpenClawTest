@@ -115,7 +115,7 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
-## Task 6 — Training Loop v1
+## Task 6 — Training Loop v1 [done]
 **Goal:** Train and checkpoint reliably.
 
 ### Deliverables
