@@ -99,7 +99,7 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
-## Task 5 — Minimal GPT-style Transformer
+## Task 5 — Minimal GPT-style Transformer [done]
 **Goal:** Implement trainable baseline model.
 
 ### Deliverables
