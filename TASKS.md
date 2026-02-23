@@ -162,7 +162,7 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
-## Task 9 — Prompt-based Generation
+## Task 9 — Prompt-based Generation [done]
 **Goal:** Use trained model for text continuation.
 
 ### Deliverables

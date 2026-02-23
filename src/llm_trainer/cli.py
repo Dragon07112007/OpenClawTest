@@ -83,6 +83,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_parser = subparsers.add_parser("generate", help="Generate text from a checkpoint.")
     _add_common_options(generate_parser)
+    generate_parser.add_argument("--run-id", default=None, help="Run ID for checkpoint lookup.")
+    generate_parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint path. Defaults to latest.",
+    )
+    generate_parser.add_argument("--prompt", required=True)
+    generate_parser.add_argument("--max-new-tokens", type=int, default=50)
+    generate_parser.add_argument("--temperature", type=float, default=1.0)
+    generate_parser.add_argument("--top-k", type=int, default=50)
     generate_parser.set_defaults(func=cmd_generate)
 
     worker_parser = subparsers.add_parser("train-worker", help=argparse.SUPPRESS)
@@ -258,7 +268,26 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 def cmd_generate(args: argparse.Namespace) -> int:
     device = get_device()
-    print(f"generate command stub (config={args.config}, device={device})")
+    run_dir = _resolve_run_dir(args.run_id)
+    checkpoint_path = args.checkpoint or str(Path("checkpoints") / run_dir.name / "latest.pt")
+    try:
+        from .generation import generate_from_checkpoint
+    except ModuleNotFoundError as exc:
+        print(f"generate failed (device={device}, error=Missing dependency: {exc})")
+        return 1
+
+    text = generate_from_checkpoint(
+        checkpoint_path=checkpoint_path,
+        prompt=args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        device=device,
+    )
+    print(
+        "generate command "
+        f"(device={device}, checkpoint={checkpoint_path}, prompt={args.prompt!r})\n{text}"
+    )
     return 0
 
 

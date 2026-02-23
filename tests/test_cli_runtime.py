@@ -1,15 +1,29 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 
 from llm_trainer import cli
 
 
-def test_generate_stub_prints_device_info(monkeypatch, capsys) -> None:
+def test_generate_stub_prints_device_info(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setattr(cli, "get_device", lambda: "cpu")
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs") / "run-1"
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "meta.json").write_text(
+        json.dumps({"run_id": "run-1", "device": "cpu", "config_path": "configs/default.toml"}),
+        encoding="utf-8",
+    )
+    (run / "state.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+    fake_generation = types.SimpleNamespace(
+        generate_from_checkpoint=lambda **kwargs: "hello output"
+    )
+    monkeypatch.setitem(sys.modules, "llm_trainer.generation", fake_generation)
 
-    rc = cli.main(["generate", "--config", "configs/default.toml"])
+    rc = cli.main(["generate", "--config", "configs/default.toml", "--prompt", "hello"])
 
     assert rc == 0
     out = capsys.readouterr().out
