@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .background import pid_is_alive, start_background_training
@@ -16,6 +17,25 @@ from .run_metadata import (
     update_run_meta,
     update_run_state,
 )
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "n/a"
+    total = max(0, int(round(float(seconds))))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _format_eta(eta_at: str | None) -> str:
+    if not eta_at:
+        return "n/a"
+    try:
+        eta = datetime.fromisoformat(eta_at.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return eta_at
+    return eta.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -230,6 +250,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         f"(run_id={meta['run_id']}, status={state.get('status')}, "
         f"epoch={state.get('epoch')}, step={state.get('global_step')}, "
         f"train_loss={state.get('train_loss')}, val_loss={state.get('val_loss')}, "
+        f"elapsed={_format_duration(state.get('elapsed_seconds'))}, "
+        f"remaining={_format_duration(state.get('remaining_seconds'))}, "
+        f"eta={_format_eta(state.get('eta_at'))}, "
         f"device={meta.get('device')}, pid={pid}, process={process_state})"
     )
     return 0

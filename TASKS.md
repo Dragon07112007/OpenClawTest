@@ -201,6 +201,37 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Next Tasks (Requested)
+
+## Task 11 — ETA/EST Training Timer [done]
+**Goal:** Show realistic progress timing for active runs.
+
+### Deliverables
+- Compute and persist estimated remaining time based on step/epoch throughput.
+- Add elapsed time, ETA timestamp, and remaining duration to run state.
+- Surface ETA/EST fields in `status` command output.
+
+### Acceptance
+- During training, `status` displays elapsed + ETA consistently.
+- ETA updates over time and does not crash when history is short.
+
+---
+
+## Task 12 — Improved TUI [done]
+**Goal:** Make the Textual UI more useful for daily training workflows.
+
+### Deliverables
+- Better run list view (status, epoch, loss, device, ETA).
+- Live detail panel for selected run (logs + metrics trends).
+- Clear keybinds/help footer and refresh controls.
+- Graceful empty/error states.
+
+### Acceptance
+- TUI is stable with 0, 1, or many runs.
+- User can quickly inspect active run health and progress from one screen.
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

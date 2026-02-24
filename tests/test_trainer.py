@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from llm_trainer.run_metadata import initialize_run
+from llm_trainer.run_metadata import initialize_run, load_state
 
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("torch") is None,
@@ -55,3 +55,7 @@ def test_train_loop_writes_checkpoints_and_logs(tmp_path) -> None:
     assert (tmp_path / "checkpoints" / run.run_id / "latest.pt").exists()
     assert (tmp_path / "checkpoints" / run.run_id / "epoch-1.pt").exists()
     assert (run.run_dir / "train.log").exists()
+    state = load_state(run.state_path)
+    assert state["elapsed_seconds"] >= 0
+    assert state["remaining_seconds"] == 0.0
+    assert isinstance(state["eta_at"], str)

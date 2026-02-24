@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import importlib
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from .dataloader import SequenceDataLoader, load_token_ids, load_tokenizer
 from .model import GPTLanguageModel
-from .run_metadata import RunFiles, update_run_state
+from .run_metadata import RunFiles, load_state, update_run_state
 
 
 def _torch():
@@ -18,6 +20,43 @@ def _append_log(run_dir: Path, payload: dict[str, Any]) -> None:
     log_path = run_dir / "train.log"
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload) + "\n")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _timer_metrics(
+    *,
+    total_steps: int,
+    global_step: int,
+    baseline_step: int,
+    baseline_elapsed_seconds: float,
+    started_monotonic: float,
+) -> dict[str, Any]:
+    elapsed = baseline_elapsed_seconds + max(0.0, monotonic() - started_monotonic)
+    completed_in_session = max(0, global_step - baseline_step)
+    remaining_steps = max(0, total_steps - global_step)
+
+    remaining_seconds: float | None = None
+    eta_at: str | None = None
+    if completed_in_session > 0 and elapsed > baseline_elapsed_seconds and remaining_steps > 0:
+        session_elapsed = elapsed - baseline_elapsed_seconds
+        steps_per_second = completed_in_session / session_elapsed if session_elapsed > 0 else 0.0
+        if steps_per_second > 0:
+            remaining_seconds = remaining_steps / steps_per_second
+            eta_at = (
+                datetime.now(UTC) + timedelta(seconds=remaining_seconds)
+            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    elif remaining_steps == 0:
+        remaining_seconds = 0.0
+        eta_at = _utc_now_iso()
+
+    return {
+        "elapsed_seconds": elapsed,
+        "remaining_seconds": remaining_seconds,
+        "eta_at": eta_at,
+    }
 
 
 def _save_checkpoint(
@@ -102,8 +141,14 @@ def train_loop(
         optimizer.load_state_dict(optimizer_state)
 
     update_run_state(state_path=run_files.state_path, status="running", metrics={"device": device})
+    state = load_state(run_files.state_path)
+    baseline_elapsed_seconds = float(state.get("elapsed_seconds", 0.0) or 0.0)
+    baseline_step = global_step
+    started_monotonic = monotonic()
     latest_loss: float | None = None
     latest_val_loss: float | None = None
+    steps_per_epoch = len(train_loader)
+    total_steps = epochs * steps_per_epoch
 
     for epoch in range(start_epoch, epochs):
         model.train()
@@ -157,6 +202,15 @@ def train_loop(
             "val_loss": latest_val_loss,
             "checkpoint": str(latest_checkpoint),
         }
+        step_payload.update(
+            _timer_metrics(
+                total_steps=total_steps,
+                global_step=global_step,
+                baseline_step=baseline_step,
+                baseline_elapsed_seconds=baseline_elapsed_seconds,
+                started_monotonic=started_monotonic,
+            )
+        )
         _append_log(run_files.run_dir, step_payload)
         update_run_state(state_path=run_files.state_path, metrics=step_payload)
         print(
@@ -164,7 +218,15 @@ def train_loop(
             f"train_loss={latest_loss:.4f} val_loss={latest_val_loss:.4f}"
         )
 
-    update_run_state(state_path=run_files.state_path, status="completed")
+    update_run_state(
+        state_path=run_files.state_path,
+        status="completed",
+        metrics={
+            "elapsed_seconds": baseline_elapsed_seconds + max(0.0, monotonic() - started_monotonic),
+            "remaining_seconds": 0.0,
+            "eta_at": _utc_now_iso(),
+        },
+    )
     return {
         "epoch": epochs,
         "global_step": global_step,

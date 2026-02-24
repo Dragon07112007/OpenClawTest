@@ -129,7 +129,17 @@ def test_status_command_reads_latest_run(monkeypatch, tmp_path, capsys) -> None:
         encoding="utf-8",
     )
     (run / "state.json").write_text(
-        json.dumps({"status": "running", "global_step": 3, "train_loss": 1.0, "val_loss": 1.5}),
+        json.dumps(
+            {
+                "status": "running",
+                "global_step": 3,
+                "train_loss": 1.0,
+                "val_loss": 1.5,
+                "elapsed_seconds": 65.0,
+                "remaining_seconds": 120.0,
+                "eta_at": "2026-02-24T11:00:00Z",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -139,10 +149,17 @@ def test_status_command_reads_latest_run(monkeypatch, tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert "run_id=run-1" in out
     assert "status=running" in out
+    assert "elapsed=00:01:05" in out
+    assert "remaining=00:02:00" in out
+    assert "eta=2026-02-24T11:00:00Z" in out
     assert "device=cpu" in out
 
 
-def test_tui_command_handles_missing_textual(capsys) -> None:
+def test_tui_command_handles_missing_textual(monkeypatch, capsys) -> None:
+    monkeypatch.setitem(sys.modules, "textual", None)
+    for module_name in list(sys.modules):
+        if module_name.startswith("textual."):
+            monkeypatch.delitem(sys.modules, module_name, raising=False)
     rc = cli.main(["tui"])
     out = capsys.readouterr().out
     assert rc == 1

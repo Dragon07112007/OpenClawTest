@@ -111,6 +111,9 @@ class SequenceDataLoader:
             labels = [self._samples[idx][1:] for idx in batch_indices]
             yield Batch(input_ids=input_ids, labels=labels)
 
+    def __len__(self) -> int:
+        return len(self._samples) // self.batch_size
+
 
 def load_token_ids(path: str | Path) -> list[int]:
     return [int(v) for v in json.loads(Path(path).read_text(encoding="utf-8"))]
@@ -118,4 +121,3 @@ def load_token_ids(path: str | Path) -> list[int]:
 
 def load_tokenizer(path: str | Path) -> BasicTokenizer:
     return BasicTokenizer.load(path)
-
