@@ -16,6 +16,7 @@ from .app_logic import (
 from .background import pid_is_alive
 from .config import load_config
 from .run_metadata import RunFiles, load_meta, load_state, update_run_meta, update_run_state
+from .telemetry import collect_host_telemetry
 
 
 def _format_metric(value: object, suffix: str = "") -> str:
@@ -349,6 +350,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     run_dir = _resolve_run_dir(args.run_id)
     meta = load_meta(run_dir / "meta.json")
     state = load_state(run_dir / "state.json")
+    selected_device = str(meta.get("selected_device", meta.get("device", "cpu")))
+    telemetry = collect_host_telemetry(device=selected_device, selected_run_state=state)
+    state = {**state, **telemetry}
 
     pid = state.get("pid")
     if isinstance(pid, int):
@@ -363,12 +367,18 @@ def cmd_status(args: argparse.Namespace) -> int:
         f"elapsed={_format_duration(state.get('elapsed_seconds'))}, "
         f"remaining={_format_duration(state.get('remaining_seconds'))}, "
         f"eta={_format_eta(state.get('eta_at'))}, "
-        f"device={meta.get('selected_device', meta.get('device'))}, "
+        f"device={selected_device}, "
         f"gpu_util={_format_metric(state.get('gpu_utilization_pct'), '%')}, "
         f"gpu_mem={_format_metric(state.get('gpu_memory_used_mb'))}/"
         f"{_format_metric(state.get('gpu_memory_total_mb'))}MB, "
         f"gpu_temp={_format_metric(state.get('gpu_temperature_c'), 'C')}, "
         f"gpu_power={_format_metric(state.get('gpu_power_w'), 'W')}, "
+        f"gpu_source={state.get('gpu_telemetry_provider') or 'n/a'}, "
+        f"gpu_diag={state.get('gpu_telemetry_reason') or 'none'}, "
+        f"cpu_util={_format_metric(state.get('cpu_utilization_pct'), '%')}, "
+        f"cpu_cores={_format_metric(state.get('cpu_count'))}, "
+        f"cpu_source={state.get('cpu_telemetry_provider') or 'n/a'}, "
+        f"cpu_diag={state.get('cpu_telemetry_reason') or 'none'}, "
         f"pid={pid}, process={process_state})"
     )
     return 0

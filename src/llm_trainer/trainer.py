@@ -11,7 +11,7 @@ from typing import Any
 from .dataloader import SequenceDataLoader, load_token_ids, load_tokenizer
 from .model import GPTLanguageModel
 from .run_metadata import RunFiles, load_state, update_run_state
-from .telemetry import collect_gpu_telemetry
+from .telemetry import collect_host_telemetry
 
 
 def _torch():
@@ -211,7 +211,7 @@ def train_loop(
                         started_monotonic=started_monotonic,
                     )
                 )
-                step_payload.update(collect_gpu_telemetry(device))
+                step_payload.update(collect_host_telemetry(device=device))
                 _append_log(run_files.run_dir, step_payload)
                 update_run_state(state_path=run_files.state_path, metrics=step_payload)
 
@@ -267,7 +267,7 @@ def train_loop(
                 started_monotonic=started_monotonic,
             )
         )
-        step_payload.update(collect_gpu_telemetry(device))
+        step_payload.update(collect_host_telemetry(device=device))
         _append_log(run_files.run_dir, step_payload)
         update_run_state(state_path=run_files.state_path, metrics=step_payload)
         print(

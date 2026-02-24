@@ -211,15 +211,22 @@ def test_archive_and_delete_model_actions_are_safe(tmp_path) -> None:
 
 
 def test_collect_system_utilization_fallbacks_without_psutil(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "psutil", None)
     monkeypatch.setattr(
-        "llm_trainer.tui.collect_gpu_telemetry",
-        lambda _device: {
+        "llm_trainer.tui.collect_host_telemetry",
+        lambda *, device, selected_run_state=None: {
             "gpu_utilization_pct": None,
             "gpu_memory_used_mb": None,
             "gpu_memory_total_mb": None,
             "gpu_temperature_c": None,
             "gpu_power_w": None,
+            "gpu_telemetry_provider": None,
+            "gpu_telemetry_reason": "gpu unavailable",
+            "cpu_utilization_pct": None,
+            "cpu_count": 8,
+            "ram_used_mb": None,
+            "ram_total_mb": None,
+            "cpu_telemetry_provider": None,
+            "cpu_telemetry_reason": "cpu unavailable",
         },
     )
 
@@ -227,7 +234,7 @@ def test_collect_system_utilization_fallbacks_without_psutil(monkeypatch) -> Non
 
     assert metrics["gpu_utilization_pct"] is None
     assert metrics["cpu_utilization_pct"] is None
-    assert metrics["cpu_count"] is None
+    assert metrics["cpu_count"] == 8
     assert metrics["ram_used_mb"] is None
 
 

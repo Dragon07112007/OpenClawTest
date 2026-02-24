@@ -790,6 +790,25 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 41 — Fix Host Telemetry Collection (GPU/CPU metrics showing n/a) [done]
+**Goal:** Ensure live system metrics populate correctly on real host systems instead of falling back to `n/a`.
+
+### Deliverables
+- Diagnose why telemetry currently returns `n/a` for:
+  - GPU usage, VRAM, temperature
+  - CPU usage, core count
+- Implement robust host telemetry detection and collection paths (with clear provider fallback order).
+- Add explicit diagnostics in status/TUI state when telemetry provider is unavailable.
+- Keep graceful fallback behavior on unsupported systems.
+- Add regression/integration tests for both available and unavailable telemetry environments.
+
+### Acceptance
+- On supported host systems, system metrics render real values in TUI/status.
+- On unsupported systems, user gets clear reason + stable `n/a` fallback.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

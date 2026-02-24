@@ -14,7 +14,7 @@ from .app_logic import (
     run_generation,
     start_training_run,
 )
-from .telemetry import collect_gpu_telemetry
+from .telemetry import collect_host_telemetry
 
 
 def _markup_safe(value: object) -> str:
@@ -476,36 +476,7 @@ def collect_system_utilization(
     selected_run_state: dict[str, Any] | None,
     selected_device: str,
 ) -> dict[str, Any]:
-    gpu_data = selected_run_state or {}
-    if not isinstance(gpu_data.get("gpu_utilization_pct"), (float, int)):
-        gpu_data = collect_gpu_telemetry(selected_device)
-
-    cpu_pct = None
-    cpu_count = None
-    ram_used_mb = None
-    ram_total_mb = None
-    try:
-        import psutil  # type: ignore[import-not-found]
-
-        cpu_pct = float(psutil.cpu_percent(interval=None))
-        cpu_count = int(psutil.cpu_count(logical=True) or 0)
-        mem = psutil.virtual_memory()
-        ram_used_mb = round(float(mem.used) / (1024 * 1024), 1)
-        ram_total_mb = round(float(mem.total) / (1024 * 1024), 1)
-    except Exception:
-        pass
-
-    return {
-        "gpu_utilization_pct": gpu_data.get("gpu_utilization_pct"),
-        "gpu_memory_used_mb": gpu_data.get("gpu_memory_used_mb"),
-        "gpu_memory_total_mb": gpu_data.get("gpu_memory_total_mb"),
-        "gpu_temperature_c": gpu_data.get("gpu_temperature_c"),
-        "gpu_power_w": gpu_data.get("gpu_power_w"),
-        "cpu_utilization_pct": cpu_pct,
-        "cpu_count": cpu_count,
-        "ram_used_mb": ram_used_mb,
-        "ram_total_mb": ram_total_mb,
-    }
+    return collect_host_telemetry(device=selected_device, selected_run_state=selected_run_state)
 
 
 def _launch_help_text(
@@ -759,6 +730,12 @@ def _utilization_panel_lines(
         "RAM: "
         f"{_fmt_float(system.get('ram_used_mb'))}/{_fmt_float(system.get('ram_total_mb'))}MB",
     ]
+    gpu_reason = system.get("gpu_telemetry_reason")
+    cpu_reason = system.get("cpu_telemetry_reason")
+    if isinstance(gpu_reason, str) and gpu_reason:
+        lines.append(f"GPU diag: {gpu_reason}")
+    if isinstance(cpu_reason, str) and cpu_reason:
+        lines.append(f"CPU diag: {cpu_reason}")
     if aggregate_remaining_time == "No active training":
         lines.append("No active training")
     else:

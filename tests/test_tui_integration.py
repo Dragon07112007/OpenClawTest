@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -246,15 +245,22 @@ async def test_tui_pilot_prompt_edit_space_and_global_keybind_isolation(
 @pytest.mark.anyio
 async def test_tui_pilot_empty_error_and_telemetry_fallback_states(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setitem(sys.modules, "psutil", None)
     monkeypatch.setattr(
-        "llm_trainer.tui.collect_gpu_telemetry",
-        lambda _device: {
+        "llm_trainer.tui.collect_host_telemetry",
+        lambda *, device, selected_run_state=None: {
             "gpu_utilization_pct": None,
             "gpu_memory_used_mb": None,
             "gpu_memory_total_mb": None,
             "gpu_temperature_c": None,
             "gpu_power_w": None,
+            "gpu_telemetry_provider": None,
+            "gpu_telemetry_reason": "gpu unavailable",
+            "cpu_utilization_pct": None,
+            "cpu_count": 8,
+            "ram_used_mb": None,
+            "ram_total_mb": None,
+            "cpu_telemetry_provider": None,
+            "cpu_telemetry_reason": "cpu unavailable",
         },
     )
     app = launch_tui(return_app=True, refresh_interval=0)
@@ -265,6 +271,8 @@ async def test_tui_pilot_empty_error_and_telemetry_fallback_states(tmp_path, mon
         assert "No checkpoints found." in _panel(app, "panel-e").content
         util = _panel(app, "panel-b").content
         assert "Usage=n/a" in util
+        assert "GPU diag: gpu unavailable" in util
+        assert "CPU diag: cpu unavailable" in util
         assert "No active training" in util
 
     run_dir = tmp_path / "runs" / "broken"

@@ -172,6 +172,47 @@ def test_status_command_reads_gpu_metrics(monkeypatch, tmp_path, capsys) -> None
     assert "device=cuda:0" in out
 
 
+def test_status_command_includes_cpu_metrics_and_telemetry_sources(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "runs" / "run-1"
+    run.mkdir(parents=True)
+    (run / "meta.json").write_text(
+        json.dumps({"run_id": "run-1", "device": "cpu", "selected_device": "cpu"}),
+        encoding="utf-8",
+    )
+    (run / "state.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "collect_host_telemetry",
+        lambda **_kwargs: {
+            "gpu_utilization_pct": None,
+            "gpu_memory_used_mb": None,
+            "gpu_memory_total_mb": None,
+            "gpu_temperature_c": None,
+            "gpu_power_w": None,
+            "gpu_telemetry_provider": None,
+            "gpu_telemetry_reason": "device is not CUDA",
+            "cpu_utilization_pct": 35.0,
+            "cpu_count": 16,
+            "ram_used_mb": 4096.0,
+            "ram_total_mb": 32768.0,
+            "cpu_telemetry_provider": "psutil",
+            "cpu_telemetry_reason": None,
+        },
+    )
+
+    rc = cli.main(["status", "--config", "configs/default.toml"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "cpu_util=35.0%" in out
+    assert "cpu_cores=16" in out
+    assert "cpu_source=psutil" in out
+    assert "gpu_diag=device is not CUDA" in out
+
+
 def test_tui_command_handles_missing_textual(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "cmd_tui", lambda _args: 1)
     rc = cli.main(["tui"])
