@@ -7,6 +7,9 @@ name = "openclawtest"
 version = "0.1.0"
 description = "OpenClaw autonomous coding test project"
 requires-python = ">=3.11"
+dependencies = [
+    "psutil>=5.9",
+]
 
 [project.scripts]
 llm-trainer = "llm_trainer.cli:main"

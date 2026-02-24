@@ -70,7 +70,10 @@ def test_collect_cpu_telemetry_reads_psutil(monkeypatch) -> None:
             total=32 * 1024 * 1024 * 1024,
         ),
     )
-    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    monkeypatch.setattr(
+        "llm_trainer.telemetry.importlib.import_module",
+        lambda _name: fake_psutil,
+    )
 
     metrics = collect_cpu_telemetry()
 
@@ -83,12 +86,18 @@ def test_collect_cpu_telemetry_reads_psutil(monkeypatch) -> None:
 
 
 def test_collect_cpu_telemetry_returns_reason_when_unavailable(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "psutil", None)
+    def _raise_module_not_found(_name: str) -> object:
+        raise ModuleNotFoundError("No module named 'psutil'")
+
+    monkeypatch.setattr(
+        "llm_trainer.telemetry.importlib.import_module",
+        _raise_module_not_found,
+    )
 
     metrics = collect_cpu_telemetry()
 
     assert metrics["cpu_utilization_pct"] is None
     assert metrics["cpu_count"] is not None
-    assert "psutil failed" in str(metrics["cpu_telemetry_reason"]) or "psutil unavailable" in str(
-        metrics["cpu_telemetry_reason"]
+    assert metrics["cpu_telemetry_reason"] == (
+        "psutil unavailable (ModuleNotFoundError); install psutil"
     )

@@ -809,6 +809,29 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 42 — Enable CPU/RAM Telemetry by Adding psutil Support [done]
+**Goal:** Restore CPU usage and RAM metrics in TUI/status by resolving missing `psutil` dependency and hardening related telemetry paths.
+
+### Deliverables
+- Add `psutil` as a runtime dependency in project packaging/environment setup.
+- Ensure telemetry module correctly reads:
+  - CPU usage
+  - CPU core count
+  - RAM used/total
+- Improve diagnostics text so dependency issues are explicit and actionable.
+- Keep safe fallback behavior if telemetry modules are unavailable.
+- Add/extend tests for:
+  - psutil-available path (real metrics populated)
+  - psutil-missing path (clear diagnostics, stable `n/a`)
+
+### Acceptance
+- CPU Usage and RAM fields show real values when `psutil` is installed.
+- CPU diagnostics no longer report `psutil unavailable` on properly provisioned environments.
+- Fallback remains stable and informative on unsupported/misconfigured environments.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 from typing import Any
@@ -138,7 +139,12 @@ def collect_gpu_telemetry(device: str) -> dict[str, Any]:
 def collect_cpu_telemetry() -> dict[str, Any]:
     fallback = empty_cpu_telemetry("psutil unavailable")
     try:
-        import psutil  # type: ignore[import-not-found]
+        psutil = importlib.import_module("psutil")
+    except ModuleNotFoundError:
+        fallback["cpu_telemetry_reason"] = (
+            "psutil unavailable (ModuleNotFoundError); install psutil"
+        )
+        return fallback
     except Exception as exc:
         fallback["cpu_telemetry_reason"] = f"psutil unavailable ({exc.__class__.__name__})"
         return fallback
