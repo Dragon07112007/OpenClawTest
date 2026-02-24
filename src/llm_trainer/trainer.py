@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
@@ -10,6 +11,7 @@ from typing import Any
 from .dataloader import SequenceDataLoader, load_token_ids, load_tokenizer
 from .model import GPTLanguageModel
 from .run_metadata import RunFiles, load_state, update_run_state
+from .telemetry import collect_gpu_telemetry
 
 
 def _torch():
@@ -107,6 +109,10 @@ def train_loop(
     lr = float(training_cfg["learning_rate"])
     seed = int(training_cfg.get("seed", 42))
     save_every_epochs = int(training_cfg.get("save_every_epochs", 1))
+    precision = str(training_cfg.get("precision", "off")).lower()
+    grad_accum_steps = max(1, int(training_cfg.get("grad_accum_steps", 1)))
+    pin_memory = bool(training_cfg.get("dataloader_pin_memory", False))
+    log_every_steps = max(1, int(training_cfg.get("log_every_steps", 10)))
 
     tokenizer = load_tokenizer(tokenizer_path)
     train_ids = load_token_ids(tokenized_train_path)
@@ -140,7 +146,18 @@ def train_loop(
     if optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)
 
-    update_run_state(state_path=run_files.state_path, status="running", metrics={"device": device})
+    update_run_state(
+        state_path=run_files.state_path,
+        status="running",
+        metrics={
+            "device": device,
+            "precision": precision,
+            "grad_accum_steps": grad_accum_steps,
+            "dataloader_pin_memory": pin_memory,
+            "dataloader_workers": int(training_cfg.get("dataloader_workers", 0)),
+            "dataloader_prefetch_factor": int(training_cfg.get("dataloader_prefetch_factor", 2)),
+        },
+    )
     state = load_state(run_files.state_path)
     baseline_elapsed_seconds = float(state.get("elapsed_seconds", 0.0) or 0.0)
     baseline_step = global_step
@@ -152,16 +169,55 @@ def train_loop(
 
     for epoch in range(start_epoch, epochs):
         model.train()
+        optimizer.zero_grad(set_to_none=True)
         for batch in train_loader:
-            input_ids = torch.tensor(batch.input_ids, dtype=torch.long, device=device)
-            labels = torch.tensor(batch.labels, dtype=torch.long, device=device)
-            optimizer.zero_grad(set_to_none=True)
-            _, loss = model(input_ids, labels)
+            input_ids = torch.tensor(batch.input_ids, dtype=torch.long)
+            labels = torch.tensor(batch.labels, dtype=torch.long)
+            if pin_memory and str(device).startswith("cuda"):
+                input_ids = input_ids.pin_memory()
+                labels = labels.pin_memory()
+            input_ids = input_ids.to(device=device, non_blocking=pin_memory)
+            labels = labels.to(device=device, non_blocking=pin_memory)
+
+            if precision in {"fp16", "bf16"} and str(device).startswith("cuda"):
+                dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+                autocast = torch.autocast(device_type="cuda", dtype=dtype)
+            else:
+                autocast = nullcontext()
+
+            with autocast:
+                _, loss = model(input_ids, labels)
             assert loss is not None
-            loss.backward()
-            optimizer.step()
+            normalized_loss = loss / grad_accum_steps
+            normalized_loss.backward()
             global_step += 1
             latest_loss = float(loss.detach().cpu().item())
+            if global_step % grad_accum_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
+            if global_step % log_every_steps == 0:
+                step_payload = {
+                    "epoch": epoch + 1,
+                    "global_step": global_step,
+                    "train_loss": latest_loss,
+                }
+                step_payload.update(
+                    _timer_metrics(
+                        total_steps=total_steps,
+                        global_step=global_step,
+                        baseline_step=baseline_step,
+                        baseline_elapsed_seconds=baseline_elapsed_seconds,
+                        started_monotonic=started_monotonic,
+                    )
+                )
+                step_payload.update(collect_gpu_telemetry(device))
+                _append_log(run_files.run_dir, step_payload)
+                update_run_state(state_path=run_files.state_path, metrics=step_payload)
+
+        if global_step % grad_accum_steps != 0:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
 
         model.eval()
         val_losses = []
@@ -211,6 +267,7 @@ def train_loop(
                 started_monotonic=started_monotonic,
             )
         )
+        step_payload.update(collect_gpu_telemetry(device))
         _append_log(run_files.run_dir, step_payload)
         update_run_state(state_path=run_files.state_path, metrics=step_payload)
         print(

@@ -232,6 +232,103 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 13 — Optional Device Override (A30 or Auto) [done]
+**Goal:** Allow explicit GPU selection (e.g., A30) while preserving portable behavior on systems without that GPU.
+
+### Deliverables
+- Add optional config/CLI device override modes:
+  - `auto` (default, current behavior)
+  - explicit device target (e.g., `cuda`, `cuda:0`, optional GPU name hint like `A30`)
+- Implement graceful fallback when requested GPU is unavailable:
+  - clear warning
+  - fallback to best available device (or fail-fast if strict mode is enabled)
+- Persist selected + requested device information in run metadata/state.
+
+### Acceptance
+- On A30 machine, user can opt-in to target it explicitly.
+- On non-A30 machine, same config still runs without crashing (with clear messaging).
+- Unit tests cover both available/unavailable override scenarios.
+
+---
+
+## Task 14 — Live GPU Utilization Metrics (btop-like visibility) [done]
+**Goal:** Expose real-time GPU utilization and memory stats in CLI/TUI monitoring, similar to what users watch in btop.
+
+### Deliverables
+- Add runtime GPU telemetry collection (prefer `pynvml`; fallback strategy when unavailable).
+- Persist key metrics in run state/log snapshots:
+  - GPU utilization %
+  - VRAM used/total
+  - (optional) power/temp if available
+- Surface these fields in:
+  - `status` command output
+  - TUI run list/detail panel
+- Keep behavior safe on CPU-only/non-NVIDIA systems (show `n/a`, no crash).
+
+### Acceptance
+- During training on NVIDIA GPU, `status` and TUI show changing utilization/memory values.
+- On systems without NVIDIA/NVML, commands remain functional with graceful `n/a` display.
+- Tests cover telemetry parsing + no-GPU fallback paths.
+
+---
+
+## Task 15 — Throughput-Oriented GPU Tuning Controls [done]
+**Goal:** Help users efficiently consume available GPU capacity without hardcoding hardware-specific defaults.
+
+### Deliverables
+- Add configurable performance knobs in config/CLI (as supported by current codebase), such as:
+  - mixed precision mode (`off`/`fp16`/`bf16` where supported)
+  - DataLoader worker/prefetch/pin-memory options
+  - optional gradient accumulation for larger effective batch size
+- Add simple guidance output (or docs section) for increasing utilization safely.
+- Ensure defaults remain conservative and portable.
+
+### Acceptance
+- User can opt into more aggressive settings on high-memory GPUs (e.g., A30).
+- Same config family still runs on lower-end or CPU systems with fallback/default behavior.
+- Validation/tests confirm no regression in existing training/status commands.
+
+---
+
+## Task 16 — TUI-Driven Training Start + Option Selection [done]
+**Goal:** Let users start/resume training and choose key run options directly from the TUI, without dropping to CLI for common flows.
+
+### Deliverables
+- Add TUI actions/forms to:
+  - start a new training run
+  - resume an existing run
+  - select/edit key options before launch (e.g., config profile, epochs, batch size, seq length, device mode, precision)
+- Add clear validation and confirmation UX before launch.
+- Show launch result feedback (run id, pid, early status/errors) in the TUI.
+- Keep CLI as source of truth; TUI should call into shared application logic (no duplicated training orchestration).
+
+### Acceptance
+- User can launch a run end-to-end from TUI on a fresh terminal session.
+- Invalid/missing options are caught with actionable error messages.
+- Works on GPU and CPU-only systems with graceful fallbacks.
+- Tests cover the TUI action paths and launch parameter mapping.
+
+---
+
+## Task 17 — TUI Generation from Selected Trained Model [done]
+**Goal:** Generate text directly from the TUI using a user-selected trained run/checkpoint.
+
+### Deliverables
+- Add a TUI flow to:
+  - browse/select a completed (or user-chosen) run/checkpoint
+  - enter generation options (`prompt`, `max_new_tokens`, `temperature`, `top_k`)
+  - execute generation and render output in a readable panel
+- Show clear errors for missing checkpoints or invalid generation parameters.
+- Keep generation logic shared with existing CLI command to avoid drift.
+
+### Acceptance
+- User can pick a trained model from TUI and generate output end-to-end.
+- Generation options can be adjusted per run without editing files manually.
+- On systems without suitable checkpoints, TUI shows a graceful guidance message.
+- Tests cover parameter mapping and key success/error UI states.
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

@@ -18,9 +18,10 @@ A local-first project to train a small GPT-style language model on WikiText-2 wi
 - **Checkpointing** (`latest.pt` + periodic epoch files)
 - **Background run mode** + run metadata in `runs/<run_id>/`
 - **Status command** for quick run inspection
+- **Live GPU telemetry** in `status` + TUI (`n/a` safe on CPU/no-NVML)
 - **Resume** from checkpoint with `--more-epochs`
 - **Generate** text from trained checkpoints
-- **TUI monitor** via Textual
+- **TUI monitor + actions** via Textual (start/resume/generate)
 
 ---
 
@@ -84,8 +85,14 @@ Key fields:
 - `training.batch_size`
 - `training.seq_length`
 - `training.learning_rate`
+- `training.precision` (`off`/`fp16`/`bf16`)
+- `training.grad_accum_steps`
+- `training.dataloader_workers`
+- `training.dataloader_prefetch_factor`
+- `training.dataloader_pin_memory`
 - `data.dataset_name` (wikitext-2)
-- `device.preference` (`auto`)
+- `device.preference` (`auto`, `cuda`, `cuda:N`, or GPU hint like `A30`)
+- `device.strict` (`false` by default)
 
 ---
 
@@ -95,6 +102,12 @@ Key fields:
 
 ```bash
 PYTHONPATH=src llm-trainer train --config configs/default.toml
+# Optional overrides:
+#   --device auto|cpu|cuda|cuda:0|A30
+#   --strict-device
+#   --precision off|fp16|bf16
+#   --grad-accum-steps 2
+#   --dataloader-workers 4 --dataloader-prefetch-factor 2 --dataloader-pin-memory
 ```
 
 This creates a run ID and writes run metadata under `runs/<run_id>/`.
@@ -105,6 +118,7 @@ This creates a run ID and writes run metadata under `runs/<run_id>/`.
 PYTHONPATH=src llm-trainer status
 # or
 PYTHONPATH=src llm-trainer status --run-id <run_id>
+# includes GPU util/memory/temp/power when available
 ```
 
 ### 3) Resume for more epochs
@@ -128,6 +142,8 @@ PYTHONPATH=src llm-trainer generate \
 
 ```bash
 PYTHONPATH=src llm-trainer tui
+# keys: n start new run | u resume selected | g generate from selected
+# tuning shortcuts: [ / ] epochs, d device cycle, p prompt cycle
 ```
 
 ---

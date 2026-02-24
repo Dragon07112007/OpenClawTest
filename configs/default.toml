@@ -12,6 +12,12 @@ learning_rate = 0.0003
 epochs = 3
 seed = 42
 save_every_epochs = 1
+precision = "off"
+grad_accum_steps = 1
+dataloader_workers = 0
+dataloader_prefetch_factor = 2
+dataloader_pin_memory = false
+log_every_steps = 10
 
 [data]
 dataset_name = "wikitext-2"
@@ -19,3 +25,4 @@ dataset_path = "data/wikitext-2"
 
 [device]
 preference = "auto"
+strict = false

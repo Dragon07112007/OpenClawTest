@@ -4,19 +4,24 @@ import argparse
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .background import pid_is_alive, start_background_training
-from .config import load_config
-from .data import prepare_wikitext2
-from .dataloader import SequenceDataLoader, load_token_ids, tokenize_wikitext2
-from .device import get_device
-from .run_metadata import (
-    RunFiles,
-    initialize_run,
-    load_meta,
-    load_state,
-    update_run_meta,
-    update_run_state,
+from .app_logic import (
+    DeviceResolutionError,
+    GenerateOptions,
+    apply_training_overrides,
+    resolve_device_selection,
+    resume_training_run,
+    run_generation,
+    start_training_run,
 )
+from .background import pid_is_alive
+from .config import load_config
+from .run_metadata import RunFiles, load_meta, load_state, update_run_meta, update_run_state
+
+
+def _format_metric(value: object, suffix: str = "") -> str:
+    if isinstance(value, (int, float)):
+        return f"{value}{suffix}"
+    return "n/a" if value is None else str(value)
 
 
 def _format_duration(seconds: float | int | None) -> str:
@@ -46,6 +51,54 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_device_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Device request: auto, cpu, cuda, cuda:N, or GPU name hint (e.g. A30).",
+    )
+    parser.add_argument(
+        "--strict-device",
+        action="store_true",
+        help="Fail instead of falling back when requested device is unavailable.",
+    )
+
+
+def _add_tuning_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--epochs", type=int, default=None, help="Override training epochs.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override batch size.")
+    parser.add_argument("--seq-length", type=int, default=None, help="Override sequence length.")
+    parser.add_argument(
+        "--precision",
+        choices=["off", "fp16", "bf16"],
+        default=None,
+        help="Mixed precision mode.",
+    )
+    parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=None,
+        help="Gradient accumulation steps for larger effective batch size.",
+    )
+    parser.add_argument(
+        "--dataloader-workers",
+        type=int,
+        default=None,
+        help="DataLoader worker count (portable default: 0).",
+    )
+    parser.add_argument(
+        "--dataloader-prefetch-factor",
+        type=int,
+        default=None,
+        help="DataLoader prefetch factor when workers > 0.",
+    )
+    parser.add_argument(
+        "--dataloader-pin-memory",
+        action="store_true",
+        help="Enable DataLoader pinned-memory behavior.",
+    )
+
+
 def _resolve_run_dir(run_id: str | None, runs_root: Path = Path("runs")) -> Path:
     if run_id is not None:
         run_dir = runs_root / run_id
@@ -65,6 +118,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_parser = subparsers.add_parser("train", help="Start a training run.")
     _add_common_options(train_parser)
+    _add_device_options(train_parser)
+    _add_tuning_options(train_parser)
     train_parser.add_argument(
         "--foreground",
         action="store_true",
@@ -83,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume_parser = subparsers.add_parser("resume", help="Resume a training run.")
     _add_common_options(resume_parser)
+    _add_device_options(resume_parser)
     resume_parser.add_argument(
         "--run-id",
         default=None,
@@ -95,6 +151,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resume_parser.add_argument("--more-epochs", type=int, required=True)
     resume_parser.add_argument(
+        "--precision",
+        choices=["off", "fp16", "bf16"],
+        default=None,
+        help="Mixed precision mode override for resume.",
+    )
+    resume_parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=None,
+        help="Gradient accumulation override for resume.",
+    )
+    resume_parser.add_argument(
         "--foreground",
         action="store_true",
         help="Run resume in the foreground instead of detached background mode.",
@@ -103,6 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_parser = subparsers.add_parser("generate", help="Generate text from a checkpoint.")
     _add_common_options(generate_parser)
+    _add_device_options(generate_parser)
     generate_parser.add_argument("--run-id", default=None, help="Run ID for checkpoint lookup.")
     generate_parser.add_argument(
         "--checkpoint",
@@ -120,6 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
     worker_parser.add_argument("--run-id", required=True)
     worker_parser.add_argument("--checkpoint", default=None)
     worker_parser.add_argument("--more-epochs", type=int, default=None)
+    _add_device_options(worker_parser)
+    _add_tuning_options(worker_parser)
     worker_parser.set_defaults(func=cmd_train_worker)
 
     tui_parser = subparsers.add_parser("tui", help="Launch live monitoring TUI.")
@@ -130,49 +201,43 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_train(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
-    device = get_device()
-    config["runtime"] = {"device": device}
-    data_result = prepare_wikitext2(data_root="data")
-    tokenized = tokenize_wikitext2(data_root="data", seed=config["training"].get("seed", 42))
-    train_ids = load_token_ids(tokenized.train_ids_path)
-    dataloader = SequenceDataLoader(
-        train_ids,
-        seq_length=int(config["training"]["seq_length"]),
-        batch_size=int(config["training"]["batch_size"]),
-        shuffle=True,
-        seed=int(config["training"].get("seed", 42)),
-    )
-    preview_batch = next(iter(dataloader), None)
-    run_files = initialize_run(config_path=args.config, device=device)
-    update_run_meta(
-        meta_path=run_files.meta_path,
-        updates={
-            "tokenized_train_path": str(tokenized.train_ids_path),
-            "tokenized_validation_path": str(tokenized.validation_ids_path),
-            "tokenizer_path": str(tokenized.tokenizer_path),
-            "dataset": data_result.dataset_name,
-        },
-    )
-    if args.foreground:
-        worker_args = argparse.Namespace(config=args.config, run_id=run_files.run_id)
-        cmd_train_worker(worker_args)
-        training_status = "foreground"
-    else:
-        pid = start_background_training(
-            run_dir=run_files.run_dir,
-            run_id=run_files.run_id,
+    try:
+        result = start_training_run(
             config_path=args.config,
+            requested_device=args.device,
+            strict_device=args.strict_device,
+            foreground=args.foreground,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            seq_length=args.seq_length,
+            precision=args.precision,
+            grad_accum_steps=args.grad_accum_steps,
+            dataloader_workers=args.dataloader_workers,
+            dataloader_prefetch_factor=args.dataloader_prefetch_factor,
+            dataloader_pin_memory=args.dataloader_pin_memory,
         )
-        training_status = f"background(pid={pid})"
+    except DeviceResolutionError as exc:
+        print(f"train failed (error={exc})")
+        return 1
+
+    warning_text = f", warning={result.selection.warning}" if result.selection.warning else ""
     print(
         "train command "
-        f"(config={args.config}, device={device}, run_id={run_files.run_id}, "
-        f"dataset={data_result.dataset_name}, train_samples={data_result.train_samples}, "
-        f"validation_samples={data_result.validation_samples}, "
-        f"train_tokens={tokenized.train_tokens}, "
-        f"batch_shape={preview_batch.shape if preview_batch else (0, 0)}, "
-        f"training={training_status})"
+        f"(config={args.config}, requested_device={result.selection.requested}, "
+        f"device={result.selection.selected}{warning_text}, run_id={result.run_files.run_id}, "
+        f"dataset={result.data_result.dataset_name}, "
+        f"train_samples={result.data_result.train_samples}, "
+        f"validation_samples={result.data_result.validation_samples}, "
+        f"train_tokens={result.tokenized.train_tokens}, "
+        f"batch_shape={result.preview_shape}, "
+        f"precision={result.config['training'].get('precision', 'off')}, "
+        f"grad_accum_steps={result.config['training'].get('grad_accum_steps', 1)}, "
+        f"dataloader_workers={result.config['training'].get('dataloader_workers', 0)}, "
+        "dataloader_prefetch_factor="
+        f"{result.config['training'].get('dataloader_prefetch_factor', 2)}, "
+        "dataloader_pin_memory="
+        f"{result.config['training'].get('dataloader_pin_memory', False)}, "
+        f"training={result.training_mode})"
     )
     return 0
 
@@ -180,14 +245,59 @@ def cmd_train(args: argparse.Namespace) -> int:
 def cmd_train_worker(args: argparse.Namespace) -> int:
     run_dir = Path("runs") / args.run_id
     meta = load_meta(run_dir / "meta.json")
-    device = get_device()
     config = load_config(args.config)
-    config["runtime"] = {"device": device}
+    config = apply_training_overrides(
+        config,
+        epochs=getattr(args, "epochs", None),
+        batch_size=getattr(args, "batch_size", None),
+        seq_length=getattr(args, "seq_length", None),
+        precision=getattr(args, "precision", None),
+        grad_accum_steps=getattr(args, "grad_accum_steps", None),
+        dataloader_workers=getattr(args, "dataloader_workers", None),
+        dataloader_prefetch_factor=getattr(args, "dataloader_prefetch_factor", None),
+        dataloader_pin_memory=bool(getattr(args, "dataloader_pin_memory", False))
+        if hasattr(args, "dataloader_pin_memory")
+        else None,
+    )
+    try:
+        selection = resolve_device_selection(
+            config=config,
+            requested=getattr(args, "device", None),
+            strict=bool(getattr(args, "strict_device", False)),
+        )
+    except DeviceResolutionError as exc:
+        update_run_state(
+            state_path=run_dir / "state.json",
+            status="failed",
+            metrics={"error": str(exc)},
+        )
+        return 1
+    config["runtime"] = {"device": selection.selected}
+
+    update_run_meta(
+        meta_path=run_dir / "meta.json",
+        updates={
+            "requested_device": selection.requested,
+            "selected_device": selection.selected,
+            "device_warning": selection.warning,
+            "training_options": {
+                "precision": config["training"].get("precision", "off"),
+                "grad_accum_steps": int(config["training"].get("grad_accum_steps", 1)),
+                "dataloader_workers": int(config["training"].get("dataloader_workers", 0)),
+                "dataloader_prefetch_factor": int(
+                    config["training"].get("dataloader_prefetch_factor", 2)
+                ),
+                "dataloader_pin_memory": bool(
+                    config["training"].get("dataloader_pin_memory", False)
+                ),
+            },
+        },
+    )
 
     update_run_state(
         state_path=run_dir / "state.json",
         status="running",
-        metrics={"device": device},
+        metrics={"device": selection.selected, "device_warning": selection.warning},
     )
     try:
         from .trainer import train_loop
@@ -206,7 +316,7 @@ def cmd_train_worker(args: argparse.Namespace) -> int:
     global_step = 0
     if args.checkpoint is not None:
         torch = __import__("torch")
-        checkpoint = torch.load(args.checkpoint, map_location=device)
+        checkpoint = torch.load(args.checkpoint, map_location=selection.selected)
         start_epoch = int(checkpoint.get("epoch", 0))
         global_step = int(checkpoint.get("global_step", 0))
         optimizer_state = checkpoint.get("optimizer_state_dict")
@@ -253,67 +363,67 @@ def cmd_status(args: argparse.Namespace) -> int:
         f"elapsed={_format_duration(state.get('elapsed_seconds'))}, "
         f"remaining={_format_duration(state.get('remaining_seconds'))}, "
         f"eta={_format_eta(state.get('eta_at'))}, "
-        f"device={meta.get('device')}, pid={pid}, process={process_state})"
+        f"device={meta.get('selected_device', meta.get('device'))}, "
+        f"gpu_util={_format_metric(state.get('gpu_utilization_pct'), '%')}, "
+        f"gpu_mem={_format_metric(state.get('gpu_memory_used_mb'))}/"
+        f"{_format_metric(state.get('gpu_memory_total_mb'))}MB, "
+        f"gpu_temp={_format_metric(state.get('gpu_temperature_c'), 'C')}, "
+        f"gpu_power={_format_metric(state.get('gpu_power_w'), 'W')}, "
+        f"pid={pid}, process={process_state})"
     )
     return 0
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
     run_dir = _resolve_run_dir(args.run_id)
-    run_id = run_dir.name
-    checkpoint_path = args.checkpoint or str(Path("checkpoints") / run_id / "latest.pt")
-    update_run_state(
-        state_path=run_dir / "state.json",
-        status="queued",
-        metrics={"resume_checkpoint": checkpoint_path, "resume_more_epochs": args.more_epochs},
-    )
-    if args.foreground:
-        worker_args = argparse.Namespace(
-            config=args.config,
-            run_id=run_id,
-            checkpoint=checkpoint_path,
-            more_epochs=args.more_epochs,
-        )
-        cmd_train_worker(worker_args)
-        mode = "foreground"
-    else:
-        pid = start_background_training(
+    checkpoint_path = args.checkpoint or str(Path("checkpoints") / run_dir.name / "latest.pt")
+    try:
+        mode, _ = resume_training_run(
             run_dir=run_dir,
-            run_id=run_id,
             config_path=args.config,
             checkpoint_path=checkpoint_path,
             more_epochs=args.more_epochs,
+            foreground=args.foreground,
+            requested_device=args.device,
+            strict_device=args.strict_device,
+            precision=args.precision,
+            grad_accum_steps=args.grad_accum_steps,
         )
-        mode = f"background(pid={pid})"
+    except DeviceResolutionError as exc:
+        print(f"resume failed (error={exc})")
+        return 1
     print(
         "resume command "
-        f"(config={args.config}, run_id={run_id}, checkpoint={checkpoint_path}, "
+        f"(config={args.config}, run_id={run_dir.name}, checkpoint={checkpoint_path}, "
         f"more_epochs={args.more_epochs}, mode={mode})"
     )
     return 0
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    device = get_device()
     run_dir = _resolve_run_dir(args.run_id)
     checkpoint_path = args.checkpoint or str(Path("checkpoints") / run_dir.name / "latest.pt")
     try:
-        from .generation import generate_from_checkpoint
-    except ModuleNotFoundError as exc:
-        print(f"generate failed (device={device}, error=Missing dependency: {exc})")
+        text, selection = run_generation(
+            run_dir=run_dir,
+            checkpoint_path=checkpoint_path,
+            device_request=args.device,
+            strict_device=args.strict_device,
+            options=GenerateOptions(
+                prompt=args.prompt,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_k=args.top_k,
+            ),
+        )
+    except (DeviceResolutionError, FileNotFoundError, ValueError) as exc:
+        print(f"generate failed (error={exc})")
         return 1
 
-    text = generate_from_checkpoint(
-        checkpoint_path=checkpoint_path,
-        prompt=args.prompt,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        device=device,
-    )
     print(
         "generate command "
-        f"(device={device}, checkpoint={checkpoint_path}, prompt={args.prompt!r})\n{text}"
+        f"(requested_device={selection.requested}, device={selection.selected}, "
+        f"checkpoint={checkpoint_path}, prompt={args.prompt!r})\n{text}"
     )
     return 0
 
