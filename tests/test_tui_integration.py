@@ -109,7 +109,7 @@ async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monke
         await pilot.pause()
         assert (
             "generation: x=generate enter=prompt-mode esc=cancel-edit "
-            "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll"
+            "m/M=max-tokens-+ k/K=top-k-+ t/T=temp-+"
             in _footer(app).content
         )
         await pilot.press("enter")
@@ -123,7 +123,7 @@ async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monke
         await pilot.pause()
         assert (
             "generation: x=generate enter=prompt-mode esc=cancel-edit "
-            "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll"
+            "m/M=max-tokens-+ k/K=top-k-+ t/T=temp-+"
             in _footer(app).content
         )
 
@@ -307,6 +307,32 @@ async def test_tui_pilot_generate_workflow_renders_output(tmp_path, monkeypatch)
         assert "MAX_TOKENS=51" in generation
         assert "temperature=1.10 top_k=51" in generation
         assert "result for run-1 prompt=Hellohiz max=51 temp=1.1 top_k=51" in generation
+
+
+@pytest.mark.anyio
+async def test_tui_pilot_generate_lowercase_k_and_nav_keys_do_not_scroll_output(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    app = launch_tui(return_app=True, refresh_interval=0)
+    app.shared.generation_output = "\n".join(f"line-{idx}" for idx in range(20))
+
+    async with app.run_test() as pilot:
+        await pilot.press("4")
+        await pilot.pause()
+        before = _panel(app, "panel-d").content
+        assert "output lines 1-8 of 20" in before
+        assert "line-0" in before
+        assert "line-8" not in before
+
+        await pilot.press("j", "down", "up", "k")
+        await pilot.pause()
+        generation = _panel(app, "panel-d").content
+        assert "temperature=1.00 top_k=49" in generation
+        assert "output lines 1-8 of 20" in generation
+        assert "line-0" in generation
+        assert "line-8" not in generation
 
 
 @pytest.mark.anyio

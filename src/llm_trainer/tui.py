@@ -619,7 +619,7 @@ PANEL_CONTEXT_HINTS = {
     ),
     "panel-d": (
         "generation: x=generate enter=prompt-mode esc=cancel-edit "
-        "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll"
+        "m/M=max-tokens-+ k/K=top-k-+ t/T=temp-+"
     ),
     "panel-e": (
         "models: a=activate e=rename i=inspect A=archive D=delete r=refresh "
@@ -1261,8 +1261,6 @@ def launch_tui(
                 panel = self._focused_panel()
                 if panel == "panel-a":
                     reduce_tui_state(self.shared, "select_run_delta", 1)
-                elif panel == "panel-d":
-                    reduce_tui_state(self.shared, "scroll_generation", 1)
                 elif panel == "panel-e":
                     reduce_tui_state(self.shared, "select_model_delta", 1)
                 self._refresh_content()
@@ -1270,14 +1268,18 @@ def launch_tui(
 
             if key in {"k", "up"}:
                 panel = self._focused_panel()
+                if panel == "panel-d" and key == "k":
+                    pass
                 if panel == "panel-a":
                     reduce_tui_state(self.shared, "select_run_delta", -1)
-                elif panel == "panel-d":
-                    reduce_tui_state(self.shared, "scroll_generation", -1)
                 elif panel == "panel-e":
                     reduce_tui_state(self.shared, "select_model_delta", -1)
-                self._refresh_content()
-                return
+                elif key == "up":
+                    self._refresh_content()
+                    return
+                if panel != "panel-d":
+                    self._refresh_content()
+                    return
 
             if self._focused_panel() == "panel-c":
                 if self._handle_launcher_keys(key):

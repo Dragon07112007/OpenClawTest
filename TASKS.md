@@ -928,6 +928,22 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 47 — Generate Panel Key Conflict Cleanup (lowercase `k` + no j/k scroll) [done]
+**Goal:** Remove confusing key conflicts in the Generate panel by fixing lowercase `k` behavior and disabling panel scrolling via up/down/j/k.
+
+### Deliverables
+- Fix lowercase `k` handling in Generate panel so it no longer conflicts with other actions.
+- Disable Generate panel scrolling via `up/down/j/k` navigation keys.
+- Keep generation option controls and prompt editing behavior intact.
+- Add/update tests for key behavior in Generate panel.
+
+### Acceptance
+- Lowercase `k` works only for its intended Generate-panel action.
+- `up/down/j/k` no longer scroll Generate panel content.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

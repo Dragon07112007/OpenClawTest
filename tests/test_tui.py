@@ -537,7 +537,7 @@ def test_footer_hint_line_include_context_and_confirmation_state() -> None:
         (
             "panel-d",
             "generation: x=generate enter=prompt-mode esc=cancel-edit "
-            "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll",
+            "m/M=max-tokens-+ k/K=top-k-+ t/T=temp-+",
         ),
         (
             "panel-e",
