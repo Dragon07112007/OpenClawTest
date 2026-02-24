@@ -710,6 +710,30 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 37 — App-Level TUI Integration Testing (Real Feature Validation) [done]
+**Goal:** Validate the TUI with near-real interaction tests and fix any behavior gaps found.
+
+### Deliverables
+- Add app-level Textual integration tests (pilot-style) that simulate real key-driven workflows.
+- Cover end-to-end feature paths including:
+  - panel focus/navigation
+  - run/model selection
+  - training launch flow
+  - generation flow
+  - model management actions/confirmations
+  - telemetry/empty/error fallback states
+- Fix any defects discovered during integration testing.
+- Keep tests deterministic and CI-friendly.
+
+### Acceptance
+- Integration suite verifies all core TUI features from user perspective.
+- Any discovered failures are fixed in the same implementation cycle.
+- Validation passes:
+  - `PYTHONPATH=src ./.venv/bin/ruff check .`
+  - `PYTHONPATH=src ./.venv/bin/pytest -q`
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

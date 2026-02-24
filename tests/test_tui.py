@@ -563,7 +563,7 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
                 self.on_key(type("FakeEvent", (), {"key": key})())
             assert "resumed run_id=run-1" in self.shared.last_action
             assert self.shared.pending_confirmation is None
-            assert self._panels["panel-c"].border_title.endswith("[FOCUSED]")
+            assert "FOCUSED" in self._panels["panel-c"].border_title
             assert "Keyboard Help" in self._panels["panel-e"].last_update
 
     textual_app_module.App = FakeApp

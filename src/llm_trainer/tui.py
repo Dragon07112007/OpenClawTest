@@ -18,12 +18,8 @@ from .telemetry import collect_gpu_telemetry
 
 
 def _markup_safe(value: object) -> str:
-    text = str(value)
-    try:
-        from rich.markup import escape
-    except ModuleNotFoundError:
-        return text.replace("[", "\\[")
-    return escape(text)
+    # Escape every opening bracket to avoid Rich/Textual markup parsing on dynamic text.
+    return str(value).replace("[", "\\[")
 
 
 def _join_markup_safe(lines: list[object]) -> str:
@@ -936,7 +932,13 @@ Screen {
 """
 
 
-def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> int:
+def launch_tui(
+    *,
+    runs_root: str | Path = "runs",
+    run_id: str | None = None,
+    return_app: bool = False,
+    refresh_interval: float = 1.0,
+) -> int | Any:
     try:
         from textual.app import App, ComposeResult
         from textual.containers import Grid
@@ -970,7 +972,8 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
 
         def on_mount(self) -> None:
             self._apply_focus_titles()
-            self.set_interval(1.0, self._refresh_content)
+            if refresh_interval > 0:
+                self.set_interval(refresh_interval, self._refresh_content)
             self._refresh_content()
 
         def _focused_panel(self) -> str:
@@ -987,7 +990,7 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
         def _apply_focus_titles(self) -> None:
             focused = self._focused_panel()
             for panel_id, label in PANEL_LABELS.items():
-                title = f"{label} [FOCUSED]" if panel_id == focused else label
+                title = f"{label} (FOCUSED)" if panel_id == focused else label
                 self.query_one(f"#{panel_id}", Static).border_title = title
 
         def on_key(self, event) -> None:
@@ -1024,6 +1027,9 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 self._refresh_content()
                 return
             if key == "r":
+                if self._focused_panel() == "panel-e" and self._handle_model_keys(key):
+                    self._refresh_content()
+                    return
                 self._refresh_content()
                 return
             if key == "q":
@@ -1366,5 +1372,8 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
             self.query_one("#panel-e", Static).update(_join_markup_safe(panel_e_lines))
             self._apply_focus_titles()
 
-    MonitorApp().run()
+    app = MonitorApp()
+    if return_app:
+        return app
+    app.run()
     return 0
