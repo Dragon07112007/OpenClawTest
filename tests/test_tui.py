@@ -17,9 +17,9 @@ from llm_trainer.tui import (
     TuiGenerationOptions,
     TuiTrainingOptions,
     _aggregate_active_remaining_time,
+    _footer_hint_line,
     _join_markup_safe,
     _jump_focus_index,
-    _keyboard_help_lines,
     _launch_help_text,
     _markup_safe,
     _model_is_running,
@@ -175,6 +175,18 @@ def test_model_manager_marks_latest_and_propagates_active_model(tmp_path) -> Non
     assert any("active" in line and "run-1" in line for line in snapshot["models"])
     assert any("Selected Model: run-1" in line for line in snapshot["generation"])
     assert any("Selected Model: run-1" in line for line in snapshot["launcher"])
+
+
+def test_snapshot_panels_do_not_embed_key_hint_text(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+
+    assert not any("keys:" in line for line in snapshot["launcher"])
+    assert not any("keys:" in line for line in snapshot["generation"])
+    assert not any("controls:" in line for line in snapshot["models"])
 
 
 def test_rename_model_run_persists_name_and_displays_across_panels(tmp_path) -> None:
@@ -497,22 +509,15 @@ def test_keyboard_focus_helpers_cover_full_panel_order() -> None:
     assert _jump_focus_index("9", order=PANEL_ORDER) is None
 
 
-def test_keyboard_help_lines_include_context_and_confirmation_state() -> None:
-    lines = _keyboard_help_lines(
+def test_footer_hint_line_include_context_and_confirmation_state() -> None:
+    line = _footer_hint_line(
         focused_panel="panel-c",
         prompt_edit_mode=True,
         rename_edit_mode=True,
         pending_confirmation="delete",
     )
 
-    assert any("Keyboard Help" in line for line in lines)
-    assert any(
-        "context: training: s start, u resume selected model, +/- epochs" in line
-        for line in lines
-    )
-    assert any("prompt editor active" in line for line in lines)
-    assert any("rename editor active" in line for line in lines)
-    assert any("confirmation pending (delete)" in line for line in lines)
+    assert "context: confirm delete: y confirm | n/esc cancel" in line
 
 
 def test_run_dashboard_scroll_window_tracks_selection(tmp_path) -> None:
@@ -674,6 +679,7 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
 
         def __init__(self, *_args, **_kwargs) -> None:
             self._panels = {f"panel-{name}": FakeStatic() for name in ["a", "b", "c", "d", "e"]}
+            self._panels["key-footer"] = FakeStatic()
             self._exited = False
 
         def set_interval(self, *_args, **_kwargs) -> None:
@@ -692,7 +698,7 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
             assert "resumed model=run-1" in self.shared.last_action
             assert self.shared.pending_confirmation is None
             assert "FOCUSED" in self._panels["panel-c"].border_title
-            assert "Keyboard Help" in self._panels["panel-e"].last_update
+            assert "context:" in self._panels["key-footer"].last_update
 
     textual_app_module.App = FakeApp
     textual_app_module.ComposeResult = object

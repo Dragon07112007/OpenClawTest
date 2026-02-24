@@ -619,31 +619,23 @@ PANEL_CONTEXT_HINTS = {
 }
 
 
-def _keyboard_help_lines(
+def _footer_hint_line(
     *,
     focused_panel: str,
     prompt_edit_mode: bool,
     rename_edit_mode: bool,
     pending_confirmation: str | None,
-) -> list[str]:
-    lines = [
-        "Keyboard Help",
-        "global: tab/shift+tab or h/l focus | 1-5 jump panel | r refresh | q quit",
-        "selection: up/down or j/k on runs/models/output",
-        "train: s start(confirm) | u resume model(confirm) | [/] or +/- epochs | b/B batch",
-        "generate: enter edit prompt | x generate | m/M tokens | t/T temp | k/K top_k",
-        "models: a set active | e rename | i inspect | A archive(confirm) | D delete(confirm)",
-        f"context: {PANEL_CONTEXT_HINTS.get(focused_panel, 'n/a')}",
-    ]
+) -> str:
+    base = "focus tab/shift+tab h/l 1-5 | nav j/k | r refresh | q quit"
+    context = PANEL_CONTEXT_HINTS.get(focused_panel, "n/a")
+
     if prompt_edit_mode:
-        lines.append("prompt editor active: type text | backspace/delete erase | enter/esc exit")
+        context = "prompt edit: type text | left/right/home/end | backspace/delete | enter/esc"
     if rename_edit_mode:
-        lines.append(
-            "rename editor active: type name | backspace/delete erase | enter submit | esc cancel"
-        )
+        context = "rename edit: type name | backspace/delete | enter submit | esc cancel"
     if pending_confirmation:
-        lines.append(f"confirmation pending ({pending_confirmation}): y confirm | n/esc cancel")
-    return lines
+        context = f"confirm {pending_confirmation}: y confirm | n/esc cancel"
+    return f"{base} | context: {context}"
 
 
 def _next_focus_index(current: int, *, reverse: bool, order: list[str]) -> int:
@@ -782,7 +774,6 @@ def _launcher_panel_lines(
         f"device={training_options.device}",
         f"batch_size={training_options.batch_size}",
         f"config={training_options.config}",
-        "keys: s start | [/] epochs | b/B batch | d device | p precision | v strict",
         f"confirmation={pending_confirmation or 'none'}",
     ]
 
@@ -821,7 +812,6 @@ def _generation_panel_lines(
         f"temperature={generation_options.temperature:.2f} top_k={generation_options.top_k}",
         f"prompt edit mode={'on' if prompt_edit_mode else 'off'}",
         f"prompt: {prompt_line}",
-        "keys: enter edit prompt | x generate | m/M max_tokens | t/T temperature | k/K top_k",
         "output:",
         *visible_output,
         (
@@ -941,7 +931,6 @@ def _models_panel_lines(
     lines.append(f"Latest trained model: {latest_display_name} ({latest_run_id})")
     if rename_edit_mode:
         lines.append(f"rename> {rename_buffer}")
-    lines.append("controls: a Set as Active | e Rename | D Delete(confirm) | r Refresh | i Inspect")
     return lines, selected, models[selected].run_id, models[selected].display_name
 
 
@@ -1125,6 +1114,13 @@ Screen {
     padding: 0 1;
     overflow-y: auto;
 }
+#key-footer {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    background: #1f2a30;
+    color: #d8e4ed;
+}
 #panel-a {
     border: round #5d7fa7;
 }
@@ -1154,7 +1150,7 @@ def launch_tui(
     try:
         from textual.app import App, ComposeResult
         from textual.containers import Grid
-        from textual.widgets import Footer, Header, Static
+        from textual.widgets import Header, Static
     except ModuleNotFoundError:
         print("tui failed (missing dependency: textual)")
         return 1
@@ -1180,7 +1176,7 @@ def launch_tui(
                 yield Static("", id="panel-c", classes="panel")
                 yield Static("", id="panel-e", classes="panel")
                 yield Static("", id="panel-d", classes="panel")
-            yield Footer()
+            yield Static("", id="key-footer")
 
         def on_mount(self) -> None:
             self._apply_focus_titles()
@@ -1748,10 +1744,6 @@ def launch_tui(
             panel_e_lines = list(snapshot["models"])
             panel_e_lines.append("")
             panel_e_lines.extend(snapshot["status"])
-            panel_e_lines.append(f"focus={self._focused_panel()}")
-            panel_e_lines.append(
-                f"focus hint={PANEL_CONTEXT_HINTS.get(self._focused_panel(), 'n/a')}"
-            )
             if self.shared.prompt_edit_mode:
                 panel_e_lines.append("prompt editor active")
             if self.shared.rename_edit_mode:
@@ -1760,20 +1752,21 @@ def launch_tui(
                 panel_e_lines.append(
                     f"awaiting confirm: {self.shared.pending_confirmation[0]} (y/n)"
                 )
-            panel_e_lines.append("")
-            panel_e_lines.extend(
-                _keyboard_help_lines(
-                    focused_panel=self._focused_panel(),
-                    prompt_edit_mode=self.shared.prompt_edit_mode,
-                    rename_edit_mode=self.shared.rename_edit_mode,
-                    pending_confirmation=(
-                        self.shared.pending_confirmation[0]
-                        if self.shared.pending_confirmation
-                        else None
-                    ),
+            self.query_one("#panel-e", Static).update(_join_markup_safe(panel_e_lines))
+            self.query_one("#key-footer", Static).update(
+                _markup_safe(
+                    _footer_hint_line(
+                        focused_panel=self._focused_panel(),
+                        prompt_edit_mode=self.shared.prompt_edit_mode,
+                        rename_edit_mode=self.shared.rename_edit_mode,
+                        pending_confirmation=(
+                            self.shared.pending_confirmation[0]
+                            if self.shared.pending_confirmation
+                            else None
+                        ),
+                    )
                 )
             )
-            self.query_one("#panel-e", Static).update(_join_markup_safe(panel_e_lines))
             self._apply_focus_titles()
 
     app = MonitorApp()

@@ -851,6 +851,25 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 44 — Contextual Keybind Footer (Remove In-Panel Key Hints) [done]
+**Goal:** Improve TUI visual clarity by removing key option text from panel bodies and showing context-sensitive key hints only in a dedicated bottom status line.
+
+### Deliverables
+- Remove embedded key/help option text from all main TUI panel bodies.
+- Add/upgrade a dedicated bottom footer/status line for key hints.
+- Render key hints contextually based on currently focused panel/window.
+- Ensure key hint updates are immediate when focus changes.
+- Keep keyboard-first usability intact while reducing panel clutter.
+- Add tests for focus-driven footer hint switching and panel text cleanliness.
+
+### Acceptance
+- Main panel content no longer contains key option/help clutter.
+- Bottom line always shows relevant key hints for current focused panel.
+- Focus changes correctly refresh footer hint set.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

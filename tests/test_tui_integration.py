@@ -57,6 +57,10 @@ def _panel(app, panel_id: str) -> Static:
     return app.query_one(f"#{panel_id}", Static)
 
 
+def _footer(app) -> Static:
+    return app.query_one("#key-footer", Static)
+
+
 @pytest.mark.anyio
 async def test_tui_pilot_focus_navigation_across_all_panels(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
@@ -76,6 +80,37 @@ async def test_tui_pilot_focus_navigation_across_all_panels(tmp_path, monkeypatc
         await pilot.press("1")
         await pilot.pause()
         assert "FOCUSED" in _panel(app, "panel-a").border_title
+
+
+@pytest.mark.anyio
+async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    app = launch_tui(return_app=True, refresh_interval=0)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "context: run list: up/down or j/k" in _footer(app).content
+        assert "keys:" not in _panel(app, "panel-c").content
+        assert "keys:" not in _panel(app, "panel-d").content
+        assert "controls:" not in _panel(app, "panel-e").content
+        assert "Keyboard Help" not in _panel(app, "panel-e").content
+
+        await pilot.press("3")
+        await pilot.pause()
+        assert "context: training: s start, u resume selected model, +/- epochs" in _footer(
+            app
+        ).content
+
+        await pilot.press("4")
+        await pilot.pause()
+        assert "context: generation: enter prompt, x generate" in _footer(app).content
+
+        await pilot.press("5")
+        await pilot.pause()
+        assert "context: models: a active, e rename, i inspect, A archive, D delete" in _footer(
+            app
+        ).content
 
 
 @pytest.mark.anyio
