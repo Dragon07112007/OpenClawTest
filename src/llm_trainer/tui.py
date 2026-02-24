@@ -855,28 +855,28 @@ Screen {
     overflow-y: auto;
 }
 #panel-a {
-    column: 1;
-    row: 1;
+    grid-column: 1;
+    grid-row: 1;
     border: round #5d7fa7;
 }
 #panel-b {
-    column: 2;
-    row: 1;
+    grid-column: 2;
+    grid-row: 1;
     border: round #a17f66;
 }
 #panel-c {
-    column: 1;
-    row: 2;
+    grid-column: 1;
+    grid-row: 2;
     border: round #7a77a0;
 }
 #panel-d {
-    column: 1;
-    row: 3;
+    grid-column: 1;
+    grid-row: 3;
     border: round #99865c;
 }
 #panel-e {
-    column: 2;
-    row: 2;
+    grid-column: 2;
+    grid-row: 2;
     row-span: 2;
     border: round #608a91;
 }

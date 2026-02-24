@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -402,8 +403,69 @@ def test_generation_output_scroll_window(tmp_path) -> None:
 def test_tui_css_matches_two_column_three_row_spec() -> None:
     assert "grid-size: 2 3;" in TUI_GRID_CSS
     assert "#panel-e" in TUI_GRID_CSS
+    assert "grid-column: 2;" in TUI_GRID_CSS
+    assert "grid-row: 2;" in TUI_GRID_CSS
     assert "row-span: 2;" in TUI_GRID_CSS
+    assert "\n    column:" not in TUI_GRID_CSS
+    assert "\n    row:" not in TUI_GRID_CSS
     assert "border-title-align: center;" in TUI_GRID_CSS
+
+
+def test_launch_tui_startup_sanity_with_fake_textual(monkeypatch) -> None:
+    launched = []
+
+    textual_module = types.ModuleType("textual")
+    textual_app_module = types.ModuleType("textual.app")
+    textual_containers_module = types.ModuleType("textual.containers")
+    textual_widgets_module = types.ModuleType("textual.widgets")
+
+    class FakeApp:
+        CSS = ""
+
+        def run(self) -> None:
+            css = type(self).CSS
+            if "\n    column:" in css or "\n    row:" in css:
+                raise RuntimeError("invalid Textual CSS placement property")
+            launched.append("ok")
+
+    class FakeGrid:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class FakeStatic:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    class FakeHeader:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    class FakeFooter:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    textual_app_module.App = FakeApp
+    textual_app_module.ComposeResult = object
+    textual_containers_module.Grid = FakeGrid
+    textual_widgets_module.Footer = FakeFooter
+    textual_widgets_module.Header = FakeHeader
+    textual_widgets_module.Static = FakeStatic
+
+    monkeypatch.setitem(sys.modules, "textual", textual_module)
+    monkeypatch.setitem(sys.modules, "textual.app", textual_app_module)
+    monkeypatch.setitem(sys.modules, "textual.containers", textual_containers_module)
+    monkeypatch.setitem(sys.modules, "textual.widgets", textual_widgets_module)
+
+    rc = launch_tui()
+
+    assert rc == 0
+    assert launched == ["ok"]
 
 
 def test_delete_guard_blocks_running_model(tmp_path) -> None:
