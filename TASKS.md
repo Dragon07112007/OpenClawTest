@@ -344,6 +344,141 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 19 — TUI Layout v2 (Four-Zone Dashboard) [done]
+**Goal:** Restructure the TUI into a comprehensive multi-panel dashboard.
+
+### Deliverables
+- Introduce a stable four-zone layout:
+  - top-right: runs panel
+  - center: training launcher panel
+  - bottom-left: generation prompt panel
+  - far-right: model manager panel
+- Keep existing refresh loop and navigation robust across terminal sizes.
+- Ensure panel titles/borders and visual hierarchy are clear.
+
+### Acceptance
+- Layout renders reliably in typical terminal sizes.
+- No overlap/flicker/crash while refreshing.
+- Empty states are legible in each panel.
+
+---
+
+## Task 20 — Runs Panel Upgrade (Top-Right KPIs) [done]
+**Goal:** Show run health at a glance with the requested training and device fields.
+
+### Deliverables
+- Runs table columns include:
+  - run id, status, epoch, step, loss, device, ETA/remaining, GPU usage
+- Highlight running and newest runs first.
+- Keep selection behavior predictable when list updates.
+
+### Acceptance
+- Works for 0/1/many runs.
+- Values refresh without UI instability.
+- No regressions in existing run detail behavior.
+
+---
+
+## Task 21 — System Utilization Overview Panel [done]
+**Goal:** Provide btop-like system usage visibility in the TUI.
+
+### Deliverables
+- Add a dedicated utilization panel with:
+  - GPU util %, VRAM used/total (plus temp/power when available)
+  - CPU utilization
+  - RAM usage
+- Reuse existing telemetry paths where possible.
+- Graceful fallbacks (`n/a`) on unsupported systems.
+
+### Acceptance
+- Panel updates live during training.
+- Works without NVIDIA/NVML and on CPU-only systems.
+- No crashes when telemetry sources are partially unavailable.
+
+---
+
+## Task 22 — Generation Prompt Workspace (Bottom-Left) [done]
+**Goal:** Allow entering prompt text directly in TUI and generating from selected model.
+
+### Deliverables
+- Add editable prompt input area.
+- Add generation controls (max tokens, temperature, top-k).
+- Add output display pane/section for generation results.
+- Validate parameters and show actionable errors.
+
+### Acceptance
+- Keyboard-first prompt-to-output flow works end-to-end.
+- Handles long/special-character prompts safely.
+- Clear feedback for missing model/checkpoint selection.
+
+---
+
+## Task 23 — Training Launcher Workspace (Center Panel) [done]
+**Goal:** Start/resume training from a dedicated control panel between run list and generation workspace.
+
+### Deliverables
+- Add start/resume controls in center panel.
+- Expose key launch options:
+  - config/profile, epochs, batch size, seq length, device mode, precision/tuning options
+- Add validation + confirmation before launch.
+- Show immediate launch feedback (run id/pid/errors).
+
+### Acceptance
+- User can launch or resume training fully from TUI.
+- Invalid inputs are blocked with clear messages.
+- Launched runs appear in monitoring panel promptly.
+
+---
+
+## Task 24 — Model Manager Panel (Far-Right) [done]
+**Goal:** Manage trained models/checkpoints and clearly identify latest artifacts.
+
+### Deliverables
+- Add model/checkpoint list with metadata.
+- Clearly mark latest model/checkpoint.
+- Add management actions (safe subset): select active model, inspect metadata, archive/delete with confirmation.
+
+### Acceptance
+- Latest model is always identifiable.
+- Selected model is used by generation workflow.
+- Destructive actions require explicit confirmation.
+
+---
+
+## Task 25 — Cross-Panel Workflow Integration [done]
+**Goal:** Wire all panels into one coherent workflow.
+
+### Deliverables
+- Training launcher updates runs panel in near real-time.
+- Newly completed checkpoints surface in model manager.
+- Model selection propagates into generation panel.
+- Unified status/error messaging across panels.
+
+### Acceptance
+- End-to-end flow works from one TUI session without dropping to CLI for common operations.
+- State transitions remain consistent across refresh cycles.
+
+---
+
+## Task 26 — TUI Reliability & Test Hardening (v2) [done]
+**Goal:** Make the redesigned TUI resilient with strong regression coverage.
+
+### Deliverables
+- Expand tests for:
+  - layout states
+  - panel selection/navigation
+  - launch/generate/model-management action mapping
+  - telemetry fallbacks and empty/error states
+  - markup-safety regressions for all dynamic text surfaces
+- Ensure lint/test commands remain green.
+
+### Acceptance
+- No known crash paths in normal flows.
+- Validation command passes consistently (`ruff` + `pytest`).
+- Existing CLI behavior remains backward-compatible.
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

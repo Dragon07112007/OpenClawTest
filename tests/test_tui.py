@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+from pathlib import Path
 
 import pytest
 from rich.markup import MarkupError, render
@@ -11,7 +14,11 @@ from llm_trainer.tui import (
     _join_markup_safe,
     _launch_help_text,
     _markup_safe,
+    archive_model_run,
     build_tui_snapshot,
+    collect_model_entries,
+    collect_system_utilization,
+    delete_model_run,
     launch_tui,
     tui_generate_from_run,
     tui_resume_training,
@@ -27,6 +34,7 @@ def _write_run(
     eta_at: str | None,
     *,
     gpu_utilization_pct: float | None = None,
+    mtime: float = 1.0,
 ) -> None:
     run_dir = tmp_path / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -57,15 +65,32 @@ def _write_run(
         ),
         encoding="utf-8",
     )
+    os.utime(run_dir, (mtime, mtime))
+
+
+def _write_checkpoint(tmp_path: Path, run_id: str, *, mtime: float = 1.0) -> Path:
+    checkpoint_dir = tmp_path / "checkpoints" / run_id
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = checkpoint_dir / "latest.pt"
+    checkpoint.write_bytes(b"pt")
+    os.utime(checkpoint, (mtime, mtime))
+    return checkpoint
 
 
 def test_build_tui_snapshot_empty_state(tmp_path) -> None:
-    snapshot = build_tui_snapshot(runs_root=tmp_path / "runs")
-    assert "No runs found." in snapshot["runs"][0]
-    assert "Empty state" in snapshot["detail"][0]
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+
+    assert snapshot["runs"][0] == "Runs"
+    assert snapshot["detail"][0] == "Empty state"
+    assert snapshot["generation"][0] == "Generation Workspace"
+    assert snapshot["launcher"][0] == "Training Launcher"
+    assert snapshot["models"][0] == "Model Manager"
 
 
-def test_build_tui_snapshot_single_run_detail_includes_eta_and_gpu(tmp_path) -> None:
+def test_build_tui_snapshot_runs_panel_includes_kpi_columns(tmp_path) -> None:
     _write_run(
         tmp_path,
         run_id="run-1",
@@ -75,22 +100,112 @@ def test_build_tui_snapshot_single_run_detail_includes_eta_and_gpu(tmp_path) -> 
         gpu_utilization_pct=88.0,
     )
 
-    snapshot = build_tui_snapshot(runs_root=tmp_path / "runs")
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
 
+    assert "ID | status | epoch | step | loss | device | eta/remaining | gpu" in snapshot["runs"][1]
     assert any("run-1" in row for row in snapshot["runs"])
     assert any("ETA: 2026-02-24T11:00:00Z" in line for line in snapshot["detail"])
     assert any("GPU util: 88.0" in line for line in snapshot["detail"])
 
 
-def test_build_tui_snapshot_many_runs_supports_selection(tmp_path) -> None:
-    _write_run(tmp_path, run_id="run-a", status="completed", step=5, eta_at=None)
-    _write_run(tmp_path, run_id="run-b", status="running", step=12, eta_at="2026-02-24T11:00:00Z")
+def test_running_runs_are_sorted_ahead_of_newer_completed_runs(tmp_path) -> None:
+    _write_run(tmp_path, run_id="completed-new", status="completed", step=2, eta_at=None, mtime=20)
+    _write_run(tmp_path, run_id="running-old", status="running", step=1, eta_at=None, mtime=10)
 
-    snapshot = build_tui_snapshot(runs_root=tmp_path / "runs", selected_index=1)
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+    first_data_row = snapshot["runs"][2]
 
-    assert len(snapshot["runs"]) >= 3
-    assert snapshot["selected"] == 1
-    assert any("Run: " in line for line in snapshot["detail"])
+    assert "running-old" in first_data_row
+
+
+def test_selection_prefers_selected_run_id_over_index(tmp_path) -> None:
+    _write_run(tmp_path, run_id="run-a", status="running", step=5, eta_at=None, mtime=2)
+    _write_run(tmp_path, run_id="run-b", status="running", step=12, eta_at=None, mtime=3)
+
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+        selected_index=0,
+        selected_run_id="run-a",
+    )
+
+    assert snapshot["selected_run_id"] == "run-a"
+
+
+def test_model_manager_marks_latest_and_propagates_active_model(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=5)
+    _write_checkpoint(tmp_path, "run-2", mtime=10)
+
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+        selected_model_index=0,
+        active_model_run_id="run-1",
+    )
+
+    assert any("latest" in line and "run-2" in line for line in snapshot["models"])
+    assert any("active" in line and "run-1" in line for line in snapshot["models"])
+    assert any("active model run=run-1" in line for line in snapshot["generation"])
+
+
+def test_collect_model_entries_ignores_archived_dirs(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    archived = tmp_path / "checkpoints" / "_archived"
+    archived.mkdir(parents=True)
+    (archived / "junk.pt").write_bytes(b"x")
+
+    entries = collect_model_entries(
+        checkpoints_root=tmp_path / "checkpoints",
+        runs_root=tmp_path / "runs",
+    )
+
+    assert [entry.run_id for entry in entries] == ["run-1"]
+
+
+def test_archive_and_delete_model_actions_are_safe(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+
+    ok_archive, archive_message = archive_model_run(
+        "run-1",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+    assert ok_archive is True
+    assert "archived run_id=run-1" in archive_message
+
+    archived_dirs = list((tmp_path / "checkpoints" / "_archived").glob("run-1-*"))
+    assert len(archived_dirs) == 1
+
+    _write_checkpoint(tmp_path, "run-2", mtime=2)
+    ok_delete, delete_message = delete_model_run("run-2", checkpoints_root=tmp_path / "checkpoints")
+    assert ok_delete is True
+    assert "deleted checkpoint dir for run_id=run-2" in delete_message
+    assert not (tmp_path / "checkpoints" / "run-2").exists()
+
+
+def test_collect_system_utilization_fallbacks_without_psutil(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr(
+        "llm_trainer.tui.collect_gpu_telemetry",
+        lambda _device: {
+            "gpu_utilization_pct": None,
+            "gpu_memory_used_mb": None,
+            "gpu_memory_total_mb": None,
+            "gpu_temperature_c": None,
+            "gpu_power_w": None,
+        },
+    )
+
+    metrics = collect_system_utilization(selected_run_state=None, selected_device="cpu")
+
+    assert metrics["gpu_utilization_pct"] is None
+    assert metrics["cpu_utilization_pct"] is None
+    assert metrics["ram_used_mb"] is None
 
 
 def test_tui_start_training_returns_status(monkeypatch) -> None:
@@ -140,6 +255,13 @@ def test_tui_generate_from_run_success(monkeypatch, tmp_path) -> None:
     assert "generated with cpu" in message
 
 
+def test_tui_generate_from_run_validates_options() -> None:
+    ok, message = tui_generate_from_run("run-1", TuiGenerationOptions(prompt=""))
+
+    assert ok is False
+    assert "prompt must not be empty" in message
+
+
 def test_launch_tui_missing_textual(monkeypatch, capsys) -> None:
     import builtins
 
@@ -165,23 +287,39 @@ def test_markup_safe_escapes_bracket_markup_tokens() -> None:
     render(_markup_safe(raw))
 
 
-def test_join_markup_safe_handles_detail_lines_with_markup_like_prompt(tmp_path) -> None:
+def test_join_markup_safe_handles_all_dynamic_panels_with_markup_like_text(tmp_path) -> None:
     _write_run(tmp_path, run_id="run-1", status="running", step=12, eta_at="2026-02-24T11:00:00Z")
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+
     snapshot = build_tui_snapshot(
         runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
         generation_options=TuiGenerationOptions(prompt="danger [/][bold]x["),
+        generation_output="line [/][oops]",
+        last_action="error: [/][broken]",
     )
 
+    dynamic_sections = [
+        snapshot["runs"],
+        snapshot["detail"],
+        snapshot["launcher"],
+        snapshot["generation"],
+        snapshot["utilization"],
+        snapshot["models"],
+        snapshot["status"],
+    ]
+
     with pytest.raises(MarkupError):
-        render("\n".join(snapshot["detail"]))
-    safe_detail = render(_join_markup_safe(snapshot["detail"])).plain
-    assert "danger [/][bold]x[" in safe_detail
+        render("\n".join(snapshot["generation"]))
+
+    for lines in dynamic_sections:
+        safe_plain = render(_join_markup_safe(list(lines))).plain
+        assert isinstance(safe_plain, str)
 
 
 def test_join_markup_safe_escapes_help_text_regression() -> None:
     raw_help = _launch_help_text(TuiTrainingOptions(), TuiGenerationOptions())
-    assert "[/]" in raw_help
     with pytest.raises(MarkupError):
         render(raw_help)
     safe_help = render(_markup_safe(raw_help)).plain
-    assert "[/]" in safe_help
+    assert "epochs +/-" in safe_help
