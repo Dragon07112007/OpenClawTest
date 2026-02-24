@@ -15,6 +15,19 @@ from .app_logic import (
 )
 
 
+def _markup_safe(value: object) -> str:
+    text = str(value)
+    try:
+        from rich.markup import escape
+    except ModuleNotFoundError:
+        return text.replace("[", "\\[")
+    return escape(text)
+
+
+def _join_markup_safe(lines: list[object]) -> str:
+    return "\n".join(_markup_safe(line) for line in lines)
+
+
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -467,8 +480,8 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 last_action=self.last_action,
             )
             self.selected_index = int(snapshot.get("selected", 0))
-            self.query_one("#runs", Static).update("\n".join(snapshot["runs"]))
-            self.query_one("#detail", Static).update("\n".join(snapshot["detail"]))
+            self.query_one("#runs", Static).update(_join_markup_safe(snapshot["runs"]))
+            self.query_one("#detail", Static).update(_join_markup_safe(snapshot["detail"]))
             help_text = (
                 "Keys: q quit | r refresh | j/down next | k/up prev | n start | u resume | "
                 "g generate | [/] epochs | d device | p prompt"
@@ -477,7 +490,7 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 help_text += f" | pinned run: {run_id}"
             elif snapshot.get("error"):
                 help_text += " | some runs failed to load"
-            self.query_one("#help", Static).update(help_text)
+            self.query_one("#help", Static).update(_markup_safe(help_text))
 
     MonitorApp().run()
     return 0

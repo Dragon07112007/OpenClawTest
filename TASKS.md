@@ -329,6 +329,21 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 18 — TUI Markup Safety Regression (detail/help panels) [done]
+**Goal:** Prevent Rich/Textual markup parsing crashes when dynamic strings include accidental markup-like tokens.
+
+### Deliverables
+- Ensure detail/help panel updates are markup-safe by escaping dynamic TUI strings before render.
+- Cover dangerous content sources (run metadata, action text, generation prompt/help text) so bracketed tokens like `[/]` and unmatched tags cannot crash rendering.
+- Add regression + edge-case tests for markup-like input while preserving displayed text UX.
+
+### Acceptance
+- Updating detail/help panels does not raise markup parse errors for strings containing Rich/Textual-like markup tokens.
+- Existing panel content and interactions remain unchanged for normal inputs.
+- Validation command stays green (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from rich.markup import MarkupError, render
+
 from llm_trainer.tui import (
     TuiGenerationOptions,
     TuiTrainingOptions,
+    _join_markup_safe,
+    _launch_help_text,
+    _markup_safe,
     build_tui_snapshot,
     launch_tui,
     tui_generate_from_run,
@@ -150,3 +156,32 @@ def test_launch_tui_missing_textual(monkeypatch, capsys) -> None:
 
     assert rc == 1
     assert "missing dependency: textual" in capsys.readouterr().out
+
+
+def test_markup_safe_escapes_bracket_markup_tokens() -> None:
+    raw = "text [/][bold]x[/bold] [unterminated"
+    with pytest.raises(MarkupError):
+        render(raw)
+    render(_markup_safe(raw))
+
+
+def test_join_markup_safe_handles_detail_lines_with_markup_like_prompt(tmp_path) -> None:
+    _write_run(tmp_path, run_id="run-1", status="running", step=12, eta_at="2026-02-24T11:00:00Z")
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        generation_options=TuiGenerationOptions(prompt="danger [/][bold]x["),
+    )
+
+    with pytest.raises(MarkupError):
+        render("\n".join(snapshot["detail"]))
+    safe_detail = render(_join_markup_safe(snapshot["detail"])).plain
+    assert "danger [/][bold]x[" in safe_detail
+
+
+def test_join_markup_safe_escapes_help_text_regression() -> None:
+    raw_help = _launch_help_text(TuiTrainingOptions(), TuiGenerationOptions())
+    assert "[/]" in raw_help
+    with pytest.raises(MarkupError):
+        render(raw_help)
+    safe_help = render(_markup_safe(raw_help)).plain
+    assert "[/]" in safe_help
