@@ -792,6 +792,106 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
     assert resumed == ["run-1"]
 
 
+def test_launch_tui_prompt_edit_accepts_punctuation_and_shortcuts_outside_mode(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_checkpoint(tmp_path, "run-1")
+
+    textual_module = types.ModuleType("textual")
+    textual_app_module = types.ModuleType("textual.app")
+    textual_containers_module = types.ModuleType("textual.containers")
+    textual_widgets_module = types.ModuleType("textual.widgets")
+
+    class FakeStatic:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.border_title = ""
+            self.last_update = ""
+
+        def update(self, content: str) -> None:
+            self.last_update = content
+
+    class FakeHeader:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+    class FakeGrid:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class FakeApp:
+        CSS = ""
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._panels = {f"panel-{name}": FakeStatic() for name in ["a", "b", "c", "d", "e"]}
+            self._panels["key-footer"] = FakeStatic()
+
+        def set_interval(self, *_args, **_kwargs) -> None:
+            pass
+
+        def query_one(self, selector: str, _widget_type):
+            return self._panels[selector.lstrip("#")]
+
+        def run(self) -> None:
+            self.on_mount()
+            def event(key: str, character: str | None = None):
+                return type("FakeEvent", (), {"key": key, "character": character})()
+
+            self.on_key(event("4"))
+            self.on_key(event("enter"))
+
+            punctuation_events = [
+                ("comma", ","),
+                ("period", "."),
+                ("exclamation_mark", "!"),
+                ("question_mark", "?"),
+                ("semicolon", ";"),
+                ("colon", ":"),
+                ("minus", "-"),
+                ("underscore", "_"),
+                ("left_parenthesis", "("),
+                ("right_parenthesis", ")"),
+                ("apostrophe", "'"),
+                ("quotation_mark", '"'),
+            ]
+            for key, character in punctuation_events:
+                self.on_key(event(key, character))
+
+            assert self.generation_options.prompt == "Hello,.!?;:-_()'\""
+
+            focused = self._focused_panel()
+            self.on_key(event("tab"))
+            self.on_key(event("s", "s"))
+            assert self._focused_panel() == focused
+            assert self.shared.pending_confirmation is None
+
+            self.on_key(event("enter"))
+            self.on_key(event("3"))
+            self.on_key(event("s", "s"))
+            assert self.shared.pending_confirmation == ("start", None)
+
+    textual_app_module.App = FakeApp
+    textual_app_module.ComposeResult = object
+    textual_containers_module.Grid = FakeGrid
+    textual_widgets_module.Header = FakeHeader
+    textual_widgets_module.Static = FakeStatic
+
+    monkeypatch.setitem(sys.modules, "textual", textual_module)
+    monkeypatch.setitem(sys.modules, "textual.app", textual_app_module)
+    monkeypatch.setitem(sys.modules, "textual.containers", textual_containers_module)
+    monkeypatch.setitem(sys.modules, "textual.widgets", textual_widgets_module)
+
+    rc = launch_tui()
+
+    assert rc == 0
+
+
 def test_tui_start_and_resume_validate_epoch_bounds() -> None:
     options = TuiTrainingOptions(epochs=MAX_EPOCHS + 1)
 

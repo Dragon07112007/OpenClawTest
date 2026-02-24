@@ -944,6 +944,21 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 48 — Allow Punctuation in Generate Prompt Input [done]
+**Goal:** Ensure Generate prompt input accepts common punctuation/special symbols (e.g., `. , ! ? : ; - _ ' " ( )`).
+
+### Deliverables
+- Update prompt input key handling to allow punctuation and common symbols.
+- Keep existing shortcuts and edit-mode behavior intact.
+- Add regression tests for multi-word prompts containing punctuation.
+
+### Acceptance
+- User can type prompts with dots, commas, and common punctuation in Generate panel.
+- No regression in generate keybind behavior.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

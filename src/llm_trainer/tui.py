@@ -1218,6 +1218,7 @@ def launch_tui(
 
         def on_key(self, event) -> None:
             key = event.key
+            character = getattr(event, "character", None)
 
             if self.shared.rename_edit_mode:
                 if self._handle_rename_edit_key(key):
@@ -1225,7 +1226,7 @@ def launch_tui(
                 return
 
             if self.shared.prompt_edit_mode:
-                if self._handle_prompt_edit_key(key):
+                if self._handle_prompt_edit_key(key, character):
                     self._refresh_content()
                 return
 
@@ -1542,7 +1543,7 @@ def launch_tui(
             self.generation_options.prompt = prompt[:cursor] + text + prompt[cursor:]
             reduce_tui_state(self.shared, "set_prompt_cursor", cursor + len(text))
 
-        def _handle_prompt_edit_key(self, key: str) -> bool:
+        def _handle_prompt_edit_key(self, key: str, character: str | None) -> bool:
             if key in {"enter", "escape"}:
                 reduce_tui_state(self.shared, "set_prompt_edit_mode", False)
                 reduce_tui_state(self.shared, "set_prompt_cursor", None)
@@ -1574,6 +1575,15 @@ def launch_tui(
                 return True
             if key == "space":
                 self._insert_prompt_text(" ")
+                reduce_tui_state(self.shared, "set_last_action", "prompt edited")
+                return True
+            if (
+                isinstance(character, str)
+                and len(character) == 1
+                and character not in {"\n", "\r", "\t", " "}
+                and character.isprintable()
+            ):
+                self._insert_prompt_text(character)
                 reduce_tui_state(self.shared, "set_last_action", "prompt edited")
                 return True
             if len(key) == 1:
