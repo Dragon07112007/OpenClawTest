@@ -517,7 +517,50 @@ def test_footer_hint_line_include_context_and_confirmation_state() -> None:
         pending_confirmation="delete",
     )
 
-    assert "context: confirm delete: y confirm | n/esc cancel" in line
+    assert (
+        line
+        == "global: tab shift+tab h/l left/right 1-5 j/k up/down r q | confirm delete: y n esc"
+    )
+
+
+@pytest.mark.parametrize(
+    ("focused_panel", "expected"),
+    [
+        ("panel-a", "runs: j/k up/down"),
+        ("panel-b", "system: r"),
+        ("panel-c", "training: s u [ ] - + minus plus equals b/B v d p"),
+        ("panel-d", "generation: x enter esc m/M t/T k/K j/k up/down"),
+        ("panel-e", "models: a e i A D r j/k up/down"),
+    ],
+)
+def test_footer_hint_line_matches_each_panel_context(focused_panel: str, expected: str) -> None:
+    line = _footer_hint_line(
+        focused_panel=focused_panel,
+        prompt_edit_mode=False,
+        rename_edit_mode=False,
+        pending_confirmation=None,
+    )
+    assert line.endswith(expected)
+
+
+def test_footer_hint_line_editor_modes_override_panel_context() -> None:
+    prompt_line = _footer_hint_line(
+        focused_panel="panel-e",
+        prompt_edit_mode=True,
+        rename_edit_mode=False,
+        pending_confirmation=None,
+    )
+    assert prompt_line.endswith(
+        "prompt edit: text space backspace delete left right home end enter esc"
+    )
+
+    rename_line = _footer_hint_line(
+        focused_panel="panel-d",
+        prompt_edit_mode=False,
+        rename_edit_mode=True,
+        pending_confirmation=None,
+    )
+    assert rename_line.endswith("rename edit: text space backspace delete enter esc")
 
 
 def test_run_dashboard_scroll_window_tracks_selection(tmp_path) -> None:
@@ -698,7 +741,7 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
             assert "resumed model=run-1" in self.shared.last_action
             assert self.shared.pending_confirmation is None
             assert "FOCUSED" in self._panels["panel-c"].border_title
-            assert "context:" in self._panels["key-footer"].last_update
+            assert "global:" in self._panels["key-footer"].last_update
 
     textual_app_module.App = FakeApp
     textual_app_module.ComposeResult = object

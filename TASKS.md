@@ -870,6 +870,38 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 45 — Complete Contextual Keybind Coverage Matrix in Footer [done]
+**Goal:** Ensure footer keybind hints include *all* implemented key actions per context, not just a subset.
+
+### Deliverables
+- Audit TUI key handlers and map all active keybinds by context (global + per-panel + editor modes).
+- Update footer/context hint system to reflect full key coverage for:
+  - global navigation/focus/quit/refresh
+  - Run Dashboard interactions
+  - System Dashboard interactions
+  - Train panel controls
+  - Generate panel controls (including prompt edit mode)
+  - Model panel controls (including rename/confirm/delete/archive flows)
+  - modal/confirmation/editor states
+- Ensure hints change dynamically when entering/leaving edit/confirm modes.
+- Remove stale/missing/misleading hints.
+- Add tests asserting footer hint sets for each major context/state.
+
+### Acceptance
+- Every implemented key action is represented in the correct footer context.
+- No panel/editor mode shows irrelevant or missing critical key hints.
+- Footer hints update correctly on focus and mode transitions.
+- Validation passes (`ruff` + `pytest`).
+
+### Keybind inventory to include (from current code audit)
+- **Global:** `tab`, `shift+tab`, `h/l`, `left/right`, `1-5`, `j/k`, `up/down`, `r`, `q`
+- **Panel C (Train):** `[`, `]`, `-`, `+`, `minus`, `plus`, `equals`, `b/B`, `v`, `d`, `p`, `s`, `u`
+- **Panel D (Generate):** `enter`, `escape`, `backspace`, `delete`, `space`, `m/M`, `t/T`, `k/K`, `x`
+- **Panel E (Models):** `a`, `e`, `i`, `A`, `D`, `r`, plus rename editor keys (`enter`, `escape`, `backspace`, `delete`, `left`, `right`, `home`, `end`, `space`)
+- **Confirmation states:** `y`, `n`, `escape`
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

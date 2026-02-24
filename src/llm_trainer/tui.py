@@ -611,11 +611,11 @@ PANEL_SHORTCUTS = {
     "5": "panel-e",
 }
 PANEL_CONTEXT_HINTS = {
-    "panel-a": "run list: up/down or j/k",
-    "panel-b": "system monitor: refresh r",
-    "panel-c": "training: s start, u resume selected model, +/- epochs",
-    "panel-d": "generation: enter prompt, x generate",
-    "panel-e": "models: a active, e rename, i inspect, A archive, D delete",
+    "panel-a": "runs: j/k up/down",
+    "panel-b": "system: r",
+    "panel-c": "training: s u [ ] - + minus plus equals b/B v d p",
+    "panel-d": "generation: x enter esc m/M t/T k/K j/k up/down",
+    "panel-e": "models: a e i A D r j/k up/down",
 }
 
 
@@ -626,16 +626,16 @@ def _footer_hint_line(
     rename_edit_mode: bool,
     pending_confirmation: str | None,
 ) -> str:
-    base = "focus tab/shift+tab h/l 1-5 | nav j/k | r refresh | q quit"
+    base = "global: tab shift+tab h/l left/right 1-5 j/k up/down r q"
     context = PANEL_CONTEXT_HINTS.get(focused_panel, "n/a")
 
     if prompt_edit_mode:
-        context = "prompt edit: type text | left/right/home/end | backspace/delete | enter/esc"
+        context = "prompt edit: text space backspace delete left right home end enter esc"
     if rename_edit_mode:
-        context = "rename edit: type name | backspace/delete | enter submit | esc cancel"
+        context = "rename edit: text space backspace delete enter esc"
     if pending_confirmation:
-        context = f"confirm {pending_confirmation}: y confirm | n/esc cancel"
-    return f"{base} | context: {context}"
+        context = f"confirm {pending_confirmation}: y n esc"
+    return f"{base} | {context}"
 
 
 def _next_focus_index(current: int, *, reverse: bool, order: list[str]) -> int:

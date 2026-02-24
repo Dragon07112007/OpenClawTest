@@ -90,7 +90,7 @@ async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monke
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "context: run list: up/down or j/k" in _footer(app).content
+        assert "runs: j/k up/down" in _footer(app).content
         assert "keys:" not in _panel(app, "panel-c").content
         assert "keys:" not in _panel(app, "panel-d").content
         assert "controls:" not in _panel(app, "panel-e").content
@@ -98,19 +98,34 @@ async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monke
 
         await pilot.press("3")
         await pilot.pause()
-        assert "context: training: s start, u resume selected model, +/- epochs" in _footer(
-            app
-        ).content
+        assert "training: s u \\[ ] - + minus plus equals b/B v d p" in _footer(app).content
 
         await pilot.press("4")
         await pilot.pause()
-        assert "context: generation: enter prompt, x generate" in _footer(app).content
+        assert "generation: x enter esc m/M t/T k/K j/k up/down" in _footer(app).content
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (
+            "prompt edit: text space backspace delete left right home end enter esc"
+            in _footer(app).content
+        )
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "generation: x enter esc m/M t/T k/K j/k up/down" in _footer(app).content
 
         await pilot.press("5")
         await pilot.pause()
-        assert "context: models: a active, e rename, i inspect, A archive, D delete" in _footer(
-            app
-        ).content
+        assert "models: a e i A D r j/k up/down" in _footer(app).content
+        await pilot.press("e")
+        await pilot.pause()
+        assert "rename edit: text space backspace delete enter esc" in _footer(app).content
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "models: a e i A D r j/k up/down" in _footer(app).content
+
+        await pilot.press("3", "s")
+        await pilot.pause()
+        assert "confirm start: y n esc" in _footer(app).content
 
 
 @pytest.mark.anyio
