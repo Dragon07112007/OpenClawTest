@@ -447,12 +447,75 @@ def _launch_help_text(
     generation_options: TuiGenerationOptions,
 ) -> str:
     return (
-        "Focus: tab/shift+tab | nav: j/k | refresh: r | launch: s start / u resume | "
-        "generate: x | edit prompt: enter, esc | model: a activate, i inspect, "
-        "A archive, D delete | "
-        f"epochs +/- via [/] ({training_options.epochs}) | "
+        "Focus: tab/shift+tab or h/l or 1-5 | nav: j/k or up/down | refresh: r | "
+        "launch: s start / u resume | generate: x | edit prompt: enter, esc | "
+        "model: a activate, i inspect, A archive, D delete | "
+        f"epochs +/- via [/] or +/- ({training_options.epochs}) | "
         f"prompt len={len(generation_options.prompt)}"
     )
+
+
+PANEL_ORDER = ["panel-a", "panel-b", "panel-c", "panel-d", "panel-e"]
+PANEL_LABELS = {
+    "panel-a": "Run Dashboard",
+    "panel-b": "System Dashboard",
+    "panel-c": "Train Selected Model",
+    "panel-d": "Generate From Model",
+    "panel-e": "Model Selection",
+}
+PANEL_SHORTCUTS = {
+    "1": "panel-a",
+    "2": "panel-b",
+    "3": "panel-c",
+    "4": "panel-d",
+    "5": "panel-e",
+}
+PANEL_CONTEXT_HINTS = {
+    "panel-a": "run list: up/down or j/k",
+    "panel-b": "system monitor: refresh r",
+    "panel-c": "training: s start, u resume, +/- epochs",
+    "panel-d": "generation: enter prompt, x generate",
+    "panel-e": "models: a active, i inspect, A archive, D delete",
+}
+
+
+def _keyboard_help_lines(
+    *,
+    focused_panel: str,
+    prompt_edit_mode: bool,
+    pending_confirmation: str | None,
+) -> list[str]:
+    lines = [
+        "Keyboard Help",
+        "global: tab/shift+tab or h/l focus | 1-5 jump panel | r refresh | q quit",
+        "selection: up/down or j/k on runs/models/output",
+        "train: s start(confirm) | u resume(confirm) | [/] or +/- epochs | b/B batch",
+        "generate: enter edit prompt | x generate | m/M tokens | t/T temp | k/K top_k",
+        "models: a set active | i inspect | A archive(confirm) | D delete(confirm)",
+        f"context: {PANEL_CONTEXT_HINTS.get(focused_panel, 'n/a')}",
+    ]
+    if prompt_edit_mode:
+        lines.append("prompt editor active: type text | backspace/delete erase | enter/esc exit")
+    if pending_confirmation:
+        lines.append(f"confirmation pending ({pending_confirmation}): y confirm | n/esc cancel")
+    return lines
+
+
+def _next_focus_index(current: int, *, reverse: bool, order: list[str]) -> int:
+    if not order:
+        return 0
+    delta = -1 if reverse else 1
+    return (current + delta) % len(order)
+
+
+def _jump_focus_index(key: str, *, order: list[str]) -> int | None:
+    panel = PANEL_SHORTCUTS.get(key)
+    if panel is None:
+        return None
+    try:
+        return order.index(panel)
+    except ValueError:
+        return None
 
 
 def _run_detail_lines(
@@ -887,7 +950,7 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
 
     class MonitorApp(App):
         CSS = TUI_GRID_CSS
-        panel_order = ["panel-a", "panel-c", "panel-d", "panel-e"]
+        panel_order = PANEL_ORDER
 
         def __init__(self) -> None:
             super().__init__()
@@ -906,11 +969,7 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
             yield Footer()
 
         def on_mount(self) -> None:
-            self.query_one("#panel-a", Static).border_title = "Run Dashboard"
-            self.query_one("#panel-b", Static).border_title = "System Dashboard"
-            self.query_one("#panel-c", Static).border_title = "Train Selected Model"
-            self.query_one("#panel-d", Static).border_title = "Generate From Model"
-            self.query_one("#panel-e", Static).border_title = "Model Selection"
+            self._apply_focus_titles()
             self.set_interval(1.0, self._refresh_content)
             self._refresh_content()
 
@@ -918,11 +977,18 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
             return self.panel_order[self.shared.focused_panel_index]
 
         def _cycle_focus(self, reverse: bool = False) -> None:
-            delta = -1 if reverse else 1
-            self.shared.focused_panel_index = (
-                self.shared.focused_panel_index + delta
-            ) % len(self.panel_order)
+            self.shared.focused_panel_index = _next_focus_index(
+                self.shared.focused_panel_index,
+                reverse=reverse,
+                order=self.panel_order,
+            )
             reduce_tui_state(self.shared, "set_last_action", f"focus={self._focused_panel()}")
+
+        def _apply_focus_titles(self) -> None:
+            focused = self._focused_panel()
+            for panel_id, label in PANEL_LABELS.items():
+                title = f"{label} [FOCUSED]" if panel_id == focused else label
+                self.query_one(f"#{panel_id}", Static).border_title = title
 
         def on_key(self, event) -> None:
             key = event.key
@@ -943,16 +1009,25 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 self._handle_confirmation_key(key)
                 return
 
-            if key == "tab":
+            if key in {"tab", "right", "l"}:
                 self._cycle_focus(reverse=False)
                 self._refresh_content()
                 return
-            if key == "shift+tab":
+            if key in {"shift+tab", "left", "h"}:
                 self._cycle_focus(reverse=True)
+                self._refresh_content()
+                return
+            jump_index = _jump_focus_index(key, order=self.panel_order)
+            if jump_index is not None:
+                self.shared.focused_panel_index = jump_index
+                reduce_tui_state(self.shared, "set_last_action", f"focus={self._focused_panel()}")
                 self._refresh_content()
                 return
             if key == "r":
                 self._refresh_content()
+                return
+            if key == "q":
+                self.exit()
                 return
 
             if key in {"j", "down"}:
@@ -1045,9 +1120,9 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
             self._refresh_content()
 
         def _handle_launcher_keys(self, key: str) -> bool:
-            if key == "[":
+            if key in {"[", "-"}:
                 self.training_options.epochs = max(1, self.training_options.epochs - 1)
-            elif key == "]":
+            elif key in {"]", "+"}:
                 self.training_options.epochs += 1
             elif key == "b":
                 self.training_options.batch_size = max(1, self.training_options.batch_size - 1)
@@ -1074,6 +1149,26 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
             elif key == "s":
                 reduce_tui_state(self.shared, "set_pending_confirmation", ("start", None))
                 reduce_tui_state(self.shared, "set_last_action", "confirm start training? y/n")
+                return True
+            elif key == "u":
+                resume_run_id = self.shared.selected_run_id
+                if not resume_run_id:
+                    reduce_tui_state(
+                        self.shared,
+                        "set_last_action",
+                        "error: no selected run to resume",
+                    )
+                    return True
+                reduce_tui_state(
+                    self.shared,
+                    "set_pending_confirmation",
+                    ("resume", resume_run_id),
+                )
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    f"confirm resume run_id={resume_run_id}? y/n",
+                )
                 return True
             else:
                 return False
@@ -1247,13 +1342,29 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
             panel_e_lines.append("")
             panel_e_lines.extend(snapshot["status"])
             panel_e_lines.append(f"focus={self._focused_panel()}")
+            panel_e_lines.append(
+                f"focus hint={PANEL_CONTEXT_HINTS.get(self._focused_panel(), 'n/a')}"
+            )
             if self.shared.prompt_edit_mode:
                 panel_e_lines.append("prompt editor active")
             if self.shared.pending_confirmation:
                 panel_e_lines.append(
                     f"awaiting confirm: {self.shared.pending_confirmation[0]} (y/n)"
                 )
+            panel_e_lines.append("")
+            panel_e_lines.extend(
+                _keyboard_help_lines(
+                    focused_panel=self._focused_panel(),
+                    prompt_edit_mode=self.shared.prompt_edit_mode,
+                    pending_confirmation=(
+                        self.shared.pending_confirmation[0]
+                        if self.shared.pending_confirmation
+                        else None
+                    ),
+                )
+            )
             self.query_one("#panel-e", Static).update(_join_markup_safe(panel_e_lines))
+            self._apply_focus_titles()
 
     MonitorApp().run()
     return 0

@@ -10,14 +10,18 @@ import pytest
 from rich.markup import MarkupError, render
 
 from llm_trainer.tui import (
+    PANEL_ORDER,
     TUI_GRID_CSS,
     TuiGenerationOptions,
     TuiTrainingOptions,
     _aggregate_active_remaining_time,
     _join_markup_safe,
+    _jump_focus_index,
+    _keyboard_help_lines,
     _launch_help_text,
     _markup_safe,
     _model_is_running,
+    _next_focus_index,
     archive_model_run,
     build_tui_snapshot,
     collect_model_entries,
@@ -363,6 +367,28 @@ def test_join_markup_safe_escapes_help_text_regression() -> None:
     assert "epochs +/-" in safe_help
 
 
+def test_keyboard_focus_helpers_cover_full_panel_order() -> None:
+    assert PANEL_ORDER == ["panel-a", "panel-b", "panel-c", "panel-d", "panel-e"]
+    assert _next_focus_index(0, reverse=True, order=PANEL_ORDER) == len(PANEL_ORDER) - 1
+    assert _next_focus_index(0, reverse=False, order=PANEL_ORDER) == 1
+    assert _jump_focus_index("1", order=PANEL_ORDER) == 0
+    assert _jump_focus_index("5", order=PANEL_ORDER) == 4
+    assert _jump_focus_index("9", order=PANEL_ORDER) is None
+
+
+def test_keyboard_help_lines_include_context_and_confirmation_state() -> None:
+    lines = _keyboard_help_lines(
+        focused_panel="panel-c",
+        prompt_edit_mode=True,
+        pending_confirmation="delete",
+    )
+
+    assert any("Keyboard Help" in line for line in lines)
+    assert any("context: training: s start, u resume, +/- epochs" in line for line in lines)
+    assert any("prompt editor active" in line for line in lines)
+    assert any("confirmation pending (delete)" in line for line in lines)
+
+
 def test_run_dashboard_scroll_window_tracks_selection(tmp_path) -> None:
     for idx in range(15):
         _write_run(
@@ -471,6 +497,91 @@ def test_launch_tui_startup_sanity_with_fake_textual(monkeypatch) -> None:
 
     assert rc == 0
     assert launched == ["ok"]
+
+
+def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_run(tmp_path, run_id="run-1", status="running", step=1, eta_at=None)
+    resumed: list[str] = []
+
+    def fake_resume(run_id: str, _options: TuiTrainingOptions) -> tuple[bool, str]:
+        resumed.append(run_id)
+        return (True, f"resumed run_id={run_id}")
+
+    monkeypatch.setattr("llm_trainer.tui.tui_resume_training", fake_resume)
+
+    textual_module = types.ModuleType("textual")
+    textual_app_module = types.ModuleType("textual.app")
+    textual_containers_module = types.ModuleType("textual.containers")
+    textual_widgets_module = types.ModuleType("textual.widgets")
+
+    class FakeStatic:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.border_title = ""
+            self.last_update = ""
+
+        def update(self, content: str) -> None:
+            self.last_update = content
+
+    class FakeHeader:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+    class FakeFooter:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+    class FakeGrid:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class FakeApp:
+        CSS = ""
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._panels = {f"panel-{name}": FakeStatic() for name in ["a", "b", "c", "d", "e"]}
+            self._exited = False
+
+        def set_interval(self, *_args, **_kwargs) -> None:
+            pass
+
+        def query_one(self, selector: str, _widget_type):
+            return self._panels[selector.lstrip("#")]
+
+        def exit(self) -> None:
+            self._exited = True
+
+        def run(self) -> None:
+            self.on_mount()
+            for key in ["3", "u", "y"]:
+                self.on_key(type("FakeEvent", (), {"key": key})())
+            assert "resumed run_id=run-1" in self.shared.last_action
+            assert self.shared.pending_confirmation is None
+            assert self._panels["panel-c"].border_title.endswith("[FOCUSED]")
+            assert "Keyboard Help" in self._panels["panel-e"].last_update
+
+    textual_app_module.App = FakeApp
+    textual_app_module.ComposeResult = object
+    textual_containers_module.Grid = FakeGrid
+    textual_widgets_module.Footer = FakeFooter
+    textual_widgets_module.Header = FakeHeader
+    textual_widgets_module.Static = FakeStatic
+
+    monkeypatch.setitem(sys.modules, "textual", textual_module)
+    monkeypatch.setitem(sys.modules, "textual.app", textual_app_module)
+    monkeypatch.setitem(sys.modules, "textual.containers", textual_containers_module)
+    monkeypatch.setitem(sys.modules, "textual.widgets", textual_widgets_module)
+
+    rc = launch_tui()
+
+    assert rc == 0
+    assert resumed == ["run-1"]
 
 
 def test_delete_guard_blocks_running_model(tmp_path) -> None:

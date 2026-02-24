@@ -665,6 +665,51 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 35 — Fix Textual CSS Grid Property Errors + Full Validation Sweep [todo]
+**Goal:** Resolve TUI startup failure caused by invalid Textual CSS properties (`column` / `row`) and verify end-to-end TUI reliability.
+
+### Deliverables
+- Replace invalid CSS properties in `tui.py` stylesheet with Textual-supported layout/grid properties.
+- Preserve the intended 2-column / 3-row panel mapping (including Panel E spanning rows 2–3).
+- Add/extend regression tests that catch invalid stylesheet usage and ensure `llm-trainer tui` can mount without CSS parse failures.
+- Run a full quality sweep across TUI + existing functionality.
+
+### Acceptance
+- `llm-trainer tui` starts without CSS parsing errors.
+- Intended panel layout is preserved after CSS fix.
+- Validation passes:
+  - `PYTHONPATH=src ./.venv/bin/ruff check .`
+  - `PYTHONPATH=src ./.venv/bin/pytest -q`
+- Changes committed with clear notes.
+
+---
+
+## Task 36 — Full Keyboard-First TUI Usability [done]
+**Goal:** Make the complete TUI workflow fully usable via keyboard-only interaction.
+
+### Deliverables
+- Define and implement a consistent keymap for all major actions:
+  - panel focus/navigation
+  - run/model selection
+  - training launch controls
+  - generation controls
+  - model management actions
+- Ensure all interactive controls are reachable and operable without mouse input.
+- Add an always-visible key help/legend with context-sensitive hints.
+- Add keyboard UX polish:
+  - clear focus indicators
+  - predictable tab/shift-tab and arrow behavior
+  - safe confirmation flows for destructive actions
+
+### Acceptance
+- End-to-end workflow is keyboard-only:
+  - select model → start training → inspect runs/system → generate text → manage model
+- No dead-end focus states.
+- Tests cover key action mapping and core keyboard navigation paths.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).
