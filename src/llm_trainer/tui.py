@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -92,6 +93,9 @@ def _as_float(value: object) -> float | None:
 
 MIN_EPOCHS = 1
 MAX_EPOCHS = 10_000
+MODEL_NAME_METADATA_FILE = "_model_names.json"
+MODEL_NAME_MAX_LEN = 64
+MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]*$")
 
 
 def _clamp_int(value: object, *, default: int, min_value: int, max_value: int) -> int:
@@ -146,6 +150,7 @@ class RunEntry:
 @dataclass(frozen=True)
 class ModelEntry:
     run_id: str
+    display_name: str
     checkpoint_dir: Path
     checkpoint_path: Path
     mtime: float
@@ -166,6 +171,8 @@ class TuiSharedState:
     last_action: str = "none"
     run_scroll_offset: int = 0
     generation_scroll_offset: int = 0
+    rename_edit_mode: bool = False
+    rename_buffer: str = ""
 
 
 def reduce_tui_state(state: TuiSharedState, event: str, value: object | None = None) -> None:
@@ -196,6 +203,10 @@ def reduce_tui_state(state: TuiSharedState, event: str, value: object | None = N
     elif event == "scroll_generation":
         delta = int(value) if isinstance(value, int) else 0
         state.generation_scroll_offset = max(0, state.generation_scroll_offset + delta)
+    elif event == "set_rename_edit_mode":
+        state.rename_edit_mode = bool(value)
+    elif event == "set_rename_buffer":
+        state.rename_buffer = str(value) if isinstance(value, str) else ""
 
 
 def _validate_training_options(options: TuiTrainingOptions) -> str | None:
@@ -405,6 +416,7 @@ def collect_model_entries(
     runs_root_path = Path(runs_root)
     if not checkpoints_root_path.exists():
         return []
+    model_names = _load_model_name_map(checkpoints_root=checkpoints_root_path)
 
     entries: list[ModelEntry] = []
     for run_dir in checkpoints_root_path.iterdir():
@@ -421,6 +433,7 @@ def collect_model_entries(
         entries.append(
             ModelEntry(
                 run_id=run_dir.name,
+                display_name=_effective_model_name(run_dir.name, model_names=model_names),
                 checkpoint_dir=run_dir,
                 checkpoint_path=checkpoint_path,
                 mtime=checkpoint_path.stat().st_mtime,
@@ -471,6 +484,96 @@ def _model_is_running(run_id: str, *, runs_root: Path) -> bool:
     return _is_active_status(str(state.get("status", "")))
 
 
+def _model_name_map_path(*, checkpoints_root: Path) -> Path:
+    return checkpoints_root / MODEL_NAME_METADATA_FILE
+
+
+def _load_model_name_map(*, checkpoints_root: Path) -> dict[str, str]:
+    path = _model_name_map_path(checkpoints_root=checkpoints_root)
+    if not path.exists():
+        return {}
+    try:
+        raw = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, value in raw.items():
+        if isinstance(key, str) and isinstance(value, str):
+            result[key] = value
+    return result
+
+
+def _save_model_name_map(model_names: dict[str, str], *, checkpoints_root: Path) -> None:
+    path = _model_name_map_path(checkpoints_root=checkpoints_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(model_names, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _effective_model_name(run_id: str, *, model_names: dict[str, str]) -> str:
+    override = model_names.get(run_id)
+    if isinstance(override, str) and override.strip():
+        return override
+    return run_id
+
+
+def _validate_model_display_name(name: str) -> str | None:
+    cleaned = name.strip()
+    if not cleaned:
+        return "name must not be empty"
+    if len(cleaned) > MODEL_NAME_MAX_LEN:
+        return f"name must be <= {MODEL_NAME_MAX_LEN} chars"
+    if not MODEL_NAME_PATTERN.fullmatch(cleaned):
+        return "name contains invalid characters (allowed: letters, numbers, space, _, -, .)"
+    return None
+
+
+def rename_model_run(
+    run_id: str,
+    new_name: str,
+    *,
+    checkpoints_root: str | Path = "checkpoints",
+) -> tuple[bool, str]:
+    checkpoints_root_path = Path(checkpoints_root)
+    model_dir = checkpoints_root_path / run_id
+    if not model_dir.exists() or not model_dir.is_dir():
+        return (False, f"rename failed: checkpoint dir not found for run_id={run_id}")
+
+    candidate = new_name.strip()
+    error = _validate_model_display_name(candidate)
+    if error:
+        return (False, f"rename failed: {error}")
+
+    model_names = _load_model_name_map(checkpoints_root=checkpoints_root_path)
+    current_name = _effective_model_name(run_id, model_names=model_names)
+    if candidate == current_name:
+        return (True, f"rename unchanged for run_id={run_id} name={candidate}")
+
+    existing = collect_model_entries(
+        checkpoints_root=checkpoints_root_path,
+        runs_root="runs",
+    )
+    existing_names = {
+        entry.display_name.casefold()
+        for entry in existing
+        if entry.run_id != run_id
+    }
+    if candidate.casefold() in existing_names:
+        return (False, f"rename failed: name collision with existing model name={candidate}")
+
+    if candidate == run_id:
+        model_names.pop(run_id, None)
+    else:
+        model_names[run_id] = candidate
+
+    try:
+        _save_model_name_map(model_names, checkpoints_root=checkpoints_root_path)
+    except OSError as exc:
+        return (False, f"rename failed: {exc}")
+    return (True, f"renamed run_id={run_id} to name={candidate}")
+
+
 def collect_system_utilization(
     *,
     selected_run_state: dict[str, Any] | None,
@@ -486,7 +589,7 @@ def _launch_help_text(
     return (
         "Focus: tab/shift+tab or h/l or 1-5 | nav: j/k or up/down | refresh: r | "
         "launch: s start / u resume model | generate: x | edit prompt: enter, esc | "
-        "model: a activate, i inspect, A archive, D delete | "
+        "model: a activate, e rename, i inspect, A archive, D delete | "
         f"epochs +/- via [/] or +/- ({training_options.epochs}) | "
         f"prompt len={len(generation_options.prompt)}"
     )
@@ -512,7 +615,7 @@ PANEL_CONTEXT_HINTS = {
     "panel-b": "system monitor: refresh r",
     "panel-c": "training: s start, u resume selected model, +/- epochs",
     "panel-d": "generation: enter prompt, x generate",
-    "panel-e": "models: a active, i inspect, A archive, D delete",
+    "panel-e": "models: a active, e rename, i inspect, A archive, D delete",
 }
 
 
@@ -520,6 +623,7 @@ def _keyboard_help_lines(
     *,
     focused_panel: str,
     prompt_edit_mode: bool,
+    rename_edit_mode: bool,
     pending_confirmation: str | None,
 ) -> list[str]:
     lines = [
@@ -528,11 +632,15 @@ def _keyboard_help_lines(
         "selection: up/down or j/k on runs/models/output",
         "train: s start(confirm) | u resume model(confirm) | [/] or +/- epochs | b/B batch",
         "generate: enter edit prompt | x generate | m/M tokens | t/T temp | k/K top_k",
-        "models: a set active | i inspect | A archive(confirm) | D delete(confirm)",
+        "models: a set active | e rename | i inspect | A archive(confirm) | D delete(confirm)",
         f"context: {PANEL_CONTEXT_HINTS.get(focused_panel, 'n/a')}",
     ]
     if prompt_edit_mode:
         lines.append("prompt editor active: type text | backspace/delete erase | enter/esc exit")
+    if rename_edit_mode:
+        lines.append(
+            "rename editor active: type name | backspace/delete erase | enter submit | esc cancel"
+        )
     if pending_confirmation:
         lines.append(f"confirmation pending ({pending_confirmation}): y confirm | n/esc cancel")
     return lines
@@ -657,11 +765,19 @@ def _aggregate_active_remaining_time(entries: list[RunEntry]) -> str:
 def _launcher_panel_lines(
     training_options: TuiTrainingOptions,
     active_model_run_id: str | None,
+    active_model_display_name: str | None,
     pending_confirmation: str | None,
 ) -> list[str]:
+    selected_model_text = active_model_display_name or active_model_run_id or "none"
+    if (
+        active_model_display_name
+        and active_model_run_id
+        and active_model_display_name != active_model_run_id
+    ):
+        selected_model_text = f"{active_model_display_name} ({active_model_run_id})"
     return [
         "Train Selected Model",
-        f"Selected Model: {active_model_run_id or 'none'}",
+        f"Selected Model: {selected_model_text}",
         f"epochs={training_options.epochs}",
         f"device={training_options.device}",
         f"batch_size={training_options.batch_size}",
@@ -674,6 +790,7 @@ def _launcher_panel_lines(
 def _generation_panel_lines(
     generation_options: TuiGenerationOptions,
     active_model_run_id: str | None,
+    active_model_display_name: str | None,
     generation_output: str,
     prompt_edit_mode: bool,
     prompt_cursor_index: int | None,
@@ -690,9 +807,16 @@ def _generation_panel_lines(
     max_offset = max(0, len(output_lines) - output_window)
     offset = min(max(output_scroll_offset, 0), max_offset)
     visible_output = output_lines[offset : offset + output_window]
+    selected_model_text = active_model_display_name or active_model_run_id or "none"
+    if (
+        active_model_display_name
+        and active_model_run_id
+        and active_model_display_name != active_model_run_id
+    ):
+        selected_model_text = f"{active_model_display_name} ({active_model_run_id})"
     return [
         "Generate From Model",
-        f"Selected Model: {active_model_run_id or 'none'}",
+        f"Selected Model: {selected_model_text}",
         f"MAX_TOKENS={generation_options.max_new_tokens}",
         f"temperature={generation_options.temperature:.2f} top_k={generation_options.top_k}",
         f"prompt edit mode={'on' if prompt_edit_mode else 'off'}",
@@ -768,7 +892,9 @@ def _models_panel_lines(
     selected_model_index: int,
     active_model_run_id: str | None,
     runs_root: Path,
-) -> tuple[list[str], int, str | None]:
+    rename_edit_mode: bool,
+    rename_buffer: str,
+) -> tuple[list[str], int, str | None, str | None]:
     if not models:
         return (
             [
@@ -778,10 +904,12 @@ def _models_panel_lines(
             ],
             0,
             None,
+            None,
         )
 
     selected = min(max(selected_model_index, 0), len(models) - 1)
     latest_run_id = models[0].run_id
+    latest_display_name = models[0].display_name
     lines = [
         "Model Selection",
         "name | trained | epochs | final loss | disk size | status",
@@ -806,12 +934,15 @@ def _models_panel_lines(
         if model.run_id == active_model_run_id:
             status = f"{status},active"
         lines.append(
-            f"{marker} {model.run_id} | {trained_text} | {epochs} | {final_loss} | "
+            f"{marker} {model.display_name} ({model.run_id}) | "
+            f"{trained_text} | {epochs} | {final_loss} | "
             f"{_model_size_mb(model.checkpoint_path):.1f}MB | {status}"
         )
-    lines.append(f"Latest trained model: {latest_run_id}")
-    lines.append("controls: a Set as Active | D Delete(confirm) | r Refresh | i Inspect")
-    return lines, selected, models[selected].run_id
+    lines.append(f"Latest trained model: {latest_display_name} ({latest_run_id})")
+    if rename_edit_mode:
+        lines.append(f"rename> {rename_buffer}")
+    lines.append("controls: a Set as Active | e Rename | D Delete(confirm) | r Refresh | i Inspect")
+    return lines, selected, models[selected].run_id, models[selected].display_name
 
 
 def build_tui_snapshot(
@@ -832,6 +963,8 @@ def build_tui_snapshot(
     generation_scroll_offset: int = 0,
     pending_confirmation: str | None = None,
     last_action: str | None = None,
+    rename_edit_mode: bool = False,
+    rename_buffer: str = "",
 ) -> dict[str, object]:
     runs_root_path = Path(runs_root)
     training_options = training_options or TuiTrainingOptions()
@@ -859,21 +992,29 @@ def build_tui_snapshot(
     )
 
     models = collect_model_entries(checkpoints_root=checkpoints_root, runs_root=runs_root_path)
-    models_lines, resolved_model_index, selected_model_run_id = _models_panel_lines(
+    models_lines, resolved_model_index, selected_model_run_id, selected_model_display_name = (
+        _models_panel_lines(
         models,
         selected_model_index=selected_model_index,
         active_model_run_id=active_model_run_id,
         runs_root=runs_root_path,
+        rename_edit_mode=rename_edit_mode,
+        rename_buffer=rename_buffer,
+    )
     )
 
     effective_active_model = active_model_run_id
-    known_model_ids = {m.run_id for m in models}
+    model_name_by_id = {m.run_id: m.display_name for m in models}
+    known_model_ids = set(model_name_by_id)
     if effective_active_model not in known_model_ids:
         effective_active_model = None
     if effective_active_model is None and selected_model_run_id:
         effective_active_model = selected_model_run_id
     if effective_active_model is None and models:
         effective_active_model = models[0].run_id
+    effective_active_model_name = (
+        model_name_by_id.get(effective_active_model) if effective_active_model else None
+    )
 
     selected_device = "cpu"
     if selected_entry:
@@ -899,18 +1040,33 @@ def build_tui_snapshot(
     generation_lines, resolved_generation_scroll_offset = _generation_panel_lines(
         generation_options,
         active_model_run_id=effective_active_model,
+        active_model_display_name=effective_active_model_name,
         generation_output=generation_output,
         prompt_edit_mode=prompt_edit_mode,
         prompt_cursor_index=prompt_cursor_index,
         output_scroll_offset=generation_scroll_offset,
     )
+    selected_model_text = selected_model_display_name or selected_model_run_id or "none"
+    if (
+        selected_model_display_name
+        and selected_model_run_id
+        and selected_model_display_name != selected_model_run_id
+    ):
+        selected_model_text = f"{selected_model_display_name} ({selected_model_run_id})"
+    active_model_text = effective_active_model_name or effective_active_model or "none"
+    if (
+        effective_active_model_name
+        and effective_active_model
+        and effective_active_model_name != effective_active_model
+    ):
+        active_model_text = f"{effective_active_model_name} ({effective_active_model})"
 
     status_lines = [
         "Dashboard Status",
         f"selected run={selected_run_value or 'none'}",
         f"active runs={len(active_entries)}",
-        f"selected model={selected_model_run_id or 'none'}",
-        f"active model={effective_active_model or 'none'}",
+        f"selected model={selected_model_text}",
+        f"active model={active_model_text}",
         f"last action={last_action or 'none'}",
         f"errors={'yes' if load_errors else 'no'}",
     ]
@@ -928,6 +1084,7 @@ def build_tui_snapshot(
         "launcher": _launcher_panel_lines(
             training_options,
             active_model_run_id=effective_active_model,
+            active_model_display_name=effective_active_model_name,
             pending_confirmation=pending_confirmation,
         ),
         "generation": generation_lines,
@@ -1050,6 +1207,11 @@ def launch_tui(
 
         def on_key(self, event) -> None:
             key = event.key
+
+            if self.shared.rename_edit_mode:
+                if self._handle_rename_edit_key(key):
+                    self._refresh_content()
+                return
 
             if self.shared.prompt_edit_mode:
                 if self._handle_prompt_edit_key(key):
@@ -1412,7 +1574,7 @@ def launch_tui(
             selected_model_run_id = snapshot.get("selected_model_run_id")
             if not isinstance(selected_model_run_id, str):
                 reduce_tui_state(self.shared, "set_last_action", "error: no model selected")
-                return key in {"a", "i", "A", "D"}
+                return key in {"a", "e", "i", "A", "D"}
 
             if key == "a":
                 reduce_tui_state(self.shared, "set_active_model", selected_model_run_id)
@@ -1420,6 +1582,26 @@ def launch_tui(
                     self.shared,
                     "set_last_action",
                     f"active model set run_id={selected_model_run_id}",
+                )
+                return True
+            if key == "e":
+                display_name = next(
+                    (
+                        entry.display_name
+                        for entry in collect_model_entries(
+                            checkpoints_root=checkpoints_root_path,
+                            runs_root=runs_root_path,
+                        )
+                        if entry.run_id == selected_model_run_id
+                    ),
+                    selected_model_run_id,
+                )
+                reduce_tui_state(self.shared, "set_rename_buffer", display_name)
+                reduce_tui_state(self.shared, "set_rename_edit_mode", True)
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    f"rename edit mode on for run_id={selected_model_run_id}",
                 )
                 return True
             if key == "i":
@@ -1460,6 +1642,63 @@ def launch_tui(
                 return True
             return False
 
+        def _edit_rename_delete(self, key: str) -> None:
+            value = self.shared.rename_buffer
+            if key == "backspace":
+                if not value:
+                    return
+                reduce_tui_state(self.shared, "set_rename_buffer", value[:-1])
+                return
+            if key == "delete":
+                reduce_tui_state(self.shared, "set_rename_buffer", "")
+
+        def _handle_rename_edit_key(self, key: str) -> bool:
+            snapshot = self._snapshot()
+            selected_model_run_id = snapshot.get("selected_model_run_id")
+            if not isinstance(selected_model_run_id, str):
+                reduce_tui_state(self.shared, "set_rename_edit_mode", False)
+                reduce_tui_state(self.shared, "set_rename_buffer", "")
+                reduce_tui_state(self.shared, "set_last_action", "error: no model selected")
+                return True
+
+            if key == "escape":
+                reduce_tui_state(self.shared, "set_rename_edit_mode", False)
+                reduce_tui_state(self.shared, "set_rename_buffer", "")
+                reduce_tui_state(self.shared, "set_last_action", "rename canceled")
+                return True
+            if key == "enter":
+                ok, message = rename_model_run(
+                    selected_model_run_id,
+                    self.shared.rename_buffer,
+                    checkpoints_root=checkpoints_root_path,
+                )
+                if ok:
+                    reduce_tui_state(self.shared, "set_rename_edit_mode", False)
+                    reduce_tui_state(self.shared, "set_rename_buffer", "")
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    message if ok else f"error: {message}",
+                )
+                return True
+            if key in {"backspace", "delete"}:
+                self._edit_rename_delete(key)
+                reduce_tui_state(self.shared, "set_last_action", "rename edited")
+                return True
+            if key == "space":
+                reduce_tui_state(self.shared, "set_rename_buffer", f"{self.shared.rename_buffer} ")
+                reduce_tui_state(self.shared, "set_last_action", "rename edited")
+                return True
+            if len(key) == 1:
+                reduce_tui_state(
+                    self.shared,
+                    "set_rename_buffer",
+                    f"{self.shared.rename_buffer}{key}",
+                )
+                reduce_tui_state(self.shared, "set_last_action", "rename edited")
+                return True
+            return True
+
         def _snapshot(self) -> dict[str, object]:
             return build_tui_snapshot(
                 runs_root=runs_root_path,
@@ -1482,6 +1721,8 @@ def launch_tui(
                     else None
                 ),
                 last_action=self.shared.last_action,
+                rename_edit_mode=self.shared.rename_edit_mode,
+                rename_buffer=self.shared.rename_buffer,
             )
 
         def _refresh_content(self) -> None:
@@ -1513,6 +1754,8 @@ def launch_tui(
             )
             if self.shared.prompt_edit_mode:
                 panel_e_lines.append("prompt editor active")
+            if self.shared.rename_edit_mode:
+                panel_e_lines.append("rename editor active")
             if self.shared.pending_confirmation:
                 panel_e_lines.append(
                     f"awaiting confirm: {self.shared.pending_confirmation[0]} (y/n)"
@@ -1522,6 +1765,7 @@ def launch_tui(
                 _keyboard_help_lines(
                     focused_panel=self._focused_panel(),
                     prompt_edit_mode=self.shared.prompt_edit_mode,
+                    rename_edit_mode=self.shared.rename_edit_mode,
                     pending_confirmation=(
                         self.shared.pending_confirmation[0]
                         if self.shared.pending_confirmation

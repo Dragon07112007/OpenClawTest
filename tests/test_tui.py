@@ -30,6 +30,7 @@ from llm_trainer.tui import (
     collect_system_utilization,
     delete_model_run,
     launch_tui,
+    rename_model_run,
     tui_generate_from_run,
     tui_resume_training,
     tui_start_training,
@@ -174,6 +175,74 @@ def test_model_manager_marks_latest_and_propagates_active_model(tmp_path) -> Non
     assert any("active" in line and "run-1" in line for line in snapshot["models"])
     assert any("Selected Model: run-1" in line for line in snapshot["generation"])
     assert any("Selected Model: run-1" in line for line in snapshot["launcher"])
+
+
+def test_rename_model_run_persists_name_and_displays_across_panels(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=5)
+    ok, message = rename_model_run(
+        "run-1",
+        "Alpha Model",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+    assert ok is True
+    assert "renamed run_id=run-1 to name=Alpha Model" in message
+
+    mapping = json.loads(
+        (tmp_path / "checkpoints" / "_model_names.json").read_text(encoding="utf-8")
+    )
+    assert mapping["run-1"] == "Alpha Model"
+
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+        active_model_run_id="run-1",
+    )
+    assert any("Alpha Model (run-1)" in line for line in snapshot["models"])
+    assert any("Selected Model: Alpha Model (run-1)" in line for line in snapshot["launcher"])
+    assert any("Selected Model: Alpha Model (run-1)" in line for line in snapshot["generation"])
+
+
+def test_rename_model_run_validates_invalid_input_and_collisions(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    _write_checkpoint(tmp_path, "run-2", mtime=2)
+    assert rename_model_run("run-2", "Alpha", checkpoints_root=tmp_path / "checkpoints")[0] is True
+
+    ok_empty, msg_empty = rename_model_run(
+        "run-1",
+        "   ",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+    assert ok_empty is False
+    assert "name must not be empty" in msg_empty
+
+    ok_chars, msg_chars = rename_model_run(
+        "run-1",
+        "bad/name",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+    assert ok_chars is False
+    assert "invalid characters" in msg_chars
+
+    ok_collision, msg_collision = rename_model_run(
+        "run-1",
+        "alpha",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+    assert ok_collision is False
+    assert "name collision" in msg_collision
+
+
+def test_rename_model_run_reports_persistence_error(tmp_path, monkeypatch) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+
+    def fail_write_text(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", fail_write_text)
+    ok, message = rename_model_run("run-1", "Alpha", checkpoints_root=tmp_path / "checkpoints")
+
+    assert ok is False
+    assert "rename failed: disk full" in message
 
 
 def test_collect_model_entries_ignores_archived_dirs(tmp_path) -> None:
@@ -432,6 +501,7 @@ def test_keyboard_help_lines_include_context_and_confirmation_state() -> None:
     lines = _keyboard_help_lines(
         focused_panel="panel-c",
         prompt_edit_mode=True,
+        rename_edit_mode=True,
         pending_confirmation="delete",
     )
 
@@ -441,6 +511,7 @@ def test_keyboard_help_lines_include_context_and_confirmation_state() -> None:
         for line in lines
     )
     assert any("prompt editor active" in line for line in lines)
+    assert any("rename editor active" in line for line in lines)
     assert any("confirmation pending (delete)" in line for line in lines)
 
 

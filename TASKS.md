@@ -832,6 +832,25 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 43 — TUI Model Rename Feature [done]
+**Goal:** Allow renaming models directly from the TUI Model Selection panel.
+
+### Deliverables
+- Add a rename action in Model Selection controls.
+- Support keyboard-first rename flow (enter edit mode, submit/cancel).
+- Validate rename input (non-empty, safe characters, collision handling).
+- Persist rename metadata so names remain stable across reloads.
+- Update model list rendering to show renamed model names consistently.
+- Add tests for success, validation failure, and collision/error paths.
+
+### Acceptance
+- User can rename a selected model entirely from TUI.
+- Renamed model appears consistently in selection, training, and generation panels.
+- Invalid rename attempts show clear feedback and do not corrupt state.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

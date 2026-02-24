@@ -127,6 +127,40 @@ async def test_tui_pilot_model_selection_refresh_and_guarded_delete(tmp_path, mo
 
 
 @pytest.mark.anyio
+async def test_tui_pilot_model_rename_flow_success_invalid_collision_and_cancel(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_checkpoint(tmp_path, "run-1", mtime=2)
+    _write_checkpoint(tmp_path, "run-2", mtime=1)
+    app = launch_tui(return_app=True, refresh_interval=0)
+
+    async with app.run_test() as pilot:
+        await pilot.press("5", "e")
+        await pilot.pause()
+        assert "rename editor active" in _panel(app, "panel-e").content
+        await pilot.press("delete", "r", "x", "enter")
+        await pilot.pause()
+        assert "last action=renamed run_id=run-1 to name=rx" in _panel(app, "panel-e").content
+        assert "Selected Model: rx (run-1)" in _panel(app, "panel-c").content
+        assert "Selected Model: rx (run-1)" in _panel(app, "panel-d").content
+
+        await pilot.press("j", "e", "delete", "enter")
+        await pilot.pause()
+        assert "last action=error: rename failed: name must not be empty" in _panel(
+            app, "panel-e"
+        ).content
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert "last action=rename canceled" in _panel(app, "panel-e").content
+
+        await pilot.press("e", "delete", "r", "x", "enter")
+        await pilot.pause()
+        assert "last action=error: rename failed: name collision" in _panel(app, "panel-e").content
+
+
+@pytest.mark.anyio
 async def test_tui_pilot_train_panel_workflow_success_and_failure(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_run(tmp_path, run_id="run-1", status="running", step=1, mtime=1)
