@@ -855,28 +855,18 @@ Screen {
     overflow-y: auto;
 }
 #panel-a {
-    grid-column: 1;
-    grid-row: 1;
     border: round #5d7fa7;
 }
 #panel-b {
-    grid-column: 2;
-    grid-row: 1;
     border: round #a17f66;
 }
 #panel-c {
-    grid-column: 1;
-    grid-row: 2;
     border: round #7a77a0;
 }
 #panel-d {
-    grid-column: 1;
-    grid-row: 3;
     border: round #99865c;
 }
 #panel-e {
-    grid-column: 2;
-    grid-row: 2;
     row-span: 2;
     border: round #608a91;
 }
@@ -911,8 +901,8 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 yield Static("", id="panel-a", classes="panel")
                 yield Static("", id="panel-b", classes="panel")
                 yield Static("", id="panel-c", classes="panel")
-                yield Static("", id="panel-d", classes="panel")
                 yield Static("", id="panel-e", classes="panel")
+                yield Static("", id="panel-d", classes="panel")
             yield Footer()
 
         def on_mount(self) -> None:

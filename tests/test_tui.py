@@ -403,11 +403,11 @@ def test_generation_output_scroll_window(tmp_path) -> None:
 def test_tui_css_matches_two_column_three_row_spec() -> None:
     assert "grid-size: 2 3;" in TUI_GRID_CSS
     assert "#panel-e" in TUI_GRID_CSS
-    assert "grid-column: 2;" in TUI_GRID_CSS
-    assert "grid-row: 2;" in TUI_GRID_CSS
     assert "row-span: 2;" in TUI_GRID_CSS
     assert "\n    column:" not in TUI_GRID_CSS
     assert "\n    row:" not in TUI_GRID_CSS
+    assert "grid-column:" not in TUI_GRID_CSS
+    assert "grid-row:" not in TUI_GRID_CSS
     assert "border-title-align: center;" in TUI_GRID_CSS
 
 
@@ -424,7 +424,12 @@ def test_launch_tui_startup_sanity_with_fake_textual(monkeypatch) -> None:
 
         def run(self) -> None:
             css = type(self).CSS
-            if "\n    column:" in css or "\n    row:" in css:
+            if (
+                "\n    column:" in css
+                or "\n    row:" in css
+                or "grid-column:" in css
+                or "grid-row:" in css
+            ):
                 raise RuntimeError("invalid Textual CSS placement property")
             launched.append("ok")
 
