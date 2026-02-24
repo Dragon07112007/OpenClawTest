@@ -611,11 +611,20 @@ PANEL_SHORTCUTS = {
     "5": "panel-e",
 }
 PANEL_CONTEXT_HINTS = {
-    "panel-a": "runs: j/k up/down",
-    "panel-b": "system: r",
-    "panel-c": "training: s u [ ] - + minus plus equals b/B v d p",
-    "panel-d": "generation: x enter esc m/M t/T k/K j/k up/down",
-    "panel-e": "models: a e i A D r j/k up/down",
+    "panel-a": "runs: j/k=select up/down=select",
+    "panel-b": "system: r=refresh",
+    "panel-c": (
+        "training: s=start u=resume [ ]=epochs-+ -/+/minus/plus/equals=epochs-+ "
+        "b/B=batch-+ v=strict-toggle d=device-cycle p=precision-cycle"
+    ),
+    "panel-d": (
+        "generation: x=generate enter=prompt-mode esc=cancel-edit "
+        "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll"
+    ),
+    "panel-e": (
+        "models: a=activate e=rename i=inspect A=archive D=delete r=refresh "
+        "j/k=select up/down=select"
+    ),
 }
 
 
@@ -626,15 +635,21 @@ def _footer_hint_line(
     rename_edit_mode: bool,
     pending_confirmation: str | None,
 ) -> str:
-    base = "global: tab shift+tab h/l left/right 1-5 j/k up/down r q"
+    base = "global: tab=next-panel shift+tab=prev-panel"
     context = PANEL_CONTEXT_HINTS.get(focused_panel, "n/a")
 
     if prompt_edit_mode:
-        context = "prompt edit: text space backspace delete left right home end enter esc"
+        context = (
+            "prompt edit: text=insert space=insert-space backspace=delete-left "
+            "delete=delete-right left/right=move home/end=edge enter=save esc=cancel"
+        )
     if rename_edit_mode:
-        context = "rename edit: text space backspace delete enter esc"
+        context = (
+            "rename edit: text=insert space=insert-space backspace=delete-left "
+            "delete=clear enter=save esc=cancel"
+        )
     if pending_confirmation:
-        context = f"confirm {pending_confirmation}: y n esc"
+        context = f"confirm {pending_confirmation}: y=confirm n=cancel esc=cancel"
     return f"{base} | {context}"
 
 

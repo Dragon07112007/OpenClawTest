@@ -902,6 +902,32 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 46 — Footer Keybind UX Pass: Descriptions + Minimal Global Hints [done]
+**Goal:** Improve footer keybind readability by adding short per-key descriptions in context sections, while limiting global display to only focus navigation keys.
+
+### Deliverables
+- Update contextual footer format so each keybind includes a brief action description.
+  - Example style:
+    - `training: s=start u=resume [ ]=epochs-+ b/B=batch-+`
+    - `generation: x=generate enter=prompt-mode esc=cancel`
+- Keep context sections concise but explicit for all active keys/modes.
+- Restrict **global footer keys** to only:
+  - `tab`
+  - `shift+tab`
+- Remove other global hints from display (while keeping functionality intact).
+- Add/update tests verifying:
+  - context hints include descriptions
+  - global hint line only shows tab/shift+tab
+  - focus/mode transitions still switch hints correctly
+
+### Acceptance
+- Footer context lines provide clear key→action descriptions.
+- Global line displays only `tab` and `shift+tab`.
+- No regression in keyboard functionality.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

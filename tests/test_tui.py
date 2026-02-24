@@ -519,18 +519,31 @@ def test_footer_hint_line_include_context_and_confirmation_state() -> None:
 
     assert (
         line
-        == "global: tab shift+tab h/l left/right 1-5 j/k up/down r q | confirm delete: y n esc"
+        == "global: tab=next-panel shift+tab=prev-panel | "
+        "confirm delete: y=confirm n=cancel esc=cancel"
     )
 
 
 @pytest.mark.parametrize(
     ("focused_panel", "expected"),
     [
-        ("panel-a", "runs: j/k up/down"),
-        ("panel-b", "system: r"),
-        ("panel-c", "training: s u [ ] - + minus plus equals b/B v d p"),
-        ("panel-d", "generation: x enter esc m/M t/T k/K j/k up/down"),
-        ("panel-e", "models: a e i A D r j/k up/down"),
+        ("panel-a", "runs: j/k=select up/down=select"),
+        ("panel-b", "system: r=refresh"),
+        (
+            "panel-c",
+            "training: s=start u=resume [ ]=epochs-+ -/+/minus/plus/equals=epochs-+ "
+            "b/B=batch-+ v=strict-toggle d=device-cycle p=precision-cycle",
+        ),
+        (
+            "panel-d",
+            "generation: x=generate enter=prompt-mode esc=cancel-edit "
+            "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll",
+        ),
+        (
+            "panel-e",
+            "models: a=activate e=rename i=inspect A=archive D=delete r=refresh "
+            "j/k=select up/down=select",
+        ),
     ],
 )
 def test_footer_hint_line_matches_each_panel_context(focused_panel: str, expected: str) -> None:
@@ -543,6 +556,20 @@ def test_footer_hint_line_matches_each_panel_context(focused_panel: str, expecte
     assert line.endswith(expected)
 
 
+def test_footer_hint_line_global_hints_are_minimal() -> None:
+    line = _footer_hint_line(
+        focused_panel="panel-a",
+        prompt_edit_mode=False,
+        rename_edit_mode=False,
+        pending_confirmation=None,
+    )
+    global_text = line.split("|", 1)[0].strip()
+    assert global_text == "global: tab=next-panel shift+tab=prev-panel"
+    assert "h/l" not in global_text
+    assert "1-5" not in global_text
+    assert "q" not in global_text
+
+
 def test_footer_hint_line_editor_modes_override_panel_context() -> None:
     prompt_line = _footer_hint_line(
         focused_panel="panel-e",
@@ -551,7 +578,8 @@ def test_footer_hint_line_editor_modes_override_panel_context() -> None:
         pending_confirmation=None,
     )
     assert prompt_line.endswith(
-        "prompt edit: text space backspace delete left right home end enter esc"
+        "prompt edit: text=insert space=insert-space backspace=delete-left "
+        "delete=delete-right left/right=move home/end=edge enter=save esc=cancel"
     )
 
     rename_line = _footer_hint_line(
@@ -560,7 +588,10 @@ def test_footer_hint_line_editor_modes_override_panel_context() -> None:
         rename_edit_mode=True,
         pending_confirmation=None,
     )
-    assert rename_line.endswith("rename edit: text space backspace delete enter esc")
+    assert rename_line.endswith(
+        "rename edit: text=insert space=insert-space backspace=delete-left "
+        "delete=clear enter=save esc=cancel"
+    )
 
 
 def test_run_dashboard_scroll_window_tracks_selection(tmp_path) -> None:

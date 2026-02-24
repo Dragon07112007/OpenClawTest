@@ -90,7 +90,8 @@ async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monke
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "runs: j/k up/down" in _footer(app).content
+        assert "global: tab=next-panel shift+tab=prev-panel |" in _footer(app).content
+        assert "runs: j/k=select up/down=select" in _footer(app).content
         assert "keys:" not in _panel(app, "panel-c").content
         assert "keys:" not in _panel(app, "panel-d").content
         assert "controls:" not in _panel(app, "panel-e").content
@@ -98,34 +99,59 @@ async def test_tui_footer_hints_track_focus_and_panels_are_clean(tmp_path, monke
 
         await pilot.press("3")
         await pilot.pause()
-        assert "training: s u \\[ ] - + minus plus equals b/B v d p" in _footer(app).content
+        assert (
+            "training: s=start u=resume \\[ ]=epochs-+ -/+/minus/plus/equals=epochs-+ "
+            "b/B=batch-+ v=strict-toggle d=device-cycle p=precision-cycle"
+            in _footer(app).content
+        )
 
         await pilot.press("4")
         await pilot.pause()
-        assert "generation: x enter esc m/M t/T k/K j/k up/down" in _footer(app).content
+        assert (
+            "generation: x=generate enter=prompt-mode esc=cancel-edit "
+            "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll"
+            in _footer(app).content
+        )
         await pilot.press("enter")
         await pilot.pause()
         assert (
-            "prompt edit: text space backspace delete left right home end enter esc"
+            "prompt edit: text=insert space=insert-space backspace=delete-left "
+            "delete=delete-right left/right=move home/end=edge enter=save esc=cancel"
             in _footer(app).content
         )
         await pilot.press("escape")
         await pilot.pause()
-        assert "generation: x enter esc m/M t/T k/K j/k up/down" in _footer(app).content
+        assert (
+            "generation: x=generate enter=prompt-mode esc=cancel-edit "
+            "m/M=max-tokens-+ t/T=temp-+ k/K=top-k-+ j/k=scroll up/down=scroll"
+            in _footer(app).content
+        )
 
         await pilot.press("5")
         await pilot.pause()
-        assert "models: a e i A D r j/k up/down" in _footer(app).content
+        assert (
+            "models: a=activate e=rename i=inspect A=archive D=delete r=refresh "
+            "j/k=select up/down=select"
+            in _footer(app).content
+        )
         await pilot.press("e")
         await pilot.pause()
-        assert "rename edit: text space backspace delete enter esc" in _footer(app).content
+        assert (
+            "rename edit: text=insert space=insert-space backspace=delete-left "
+            "delete=clear enter=save esc=cancel"
+            in _footer(app).content
+        )
         await pilot.press("escape")
         await pilot.pause()
-        assert "models: a e i A D r j/k up/down" in _footer(app).content
+        assert (
+            "models: a=activate e=rename i=inspect A=archive D=delete r=refresh "
+            "j/k=select up/down=select"
+            in _footer(app).content
+        )
 
         await pilot.press("3", "s")
         await pilot.pause()
-        assert "confirm start: y n esc" in _footer(app).content
+        assert "confirm start: y=confirm n=cancel esc=cancel" in _footer(app).content
 
 
 @pytest.mark.anyio
