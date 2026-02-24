@@ -90,6 +90,28 @@ def _as_float(value: object) -> float | None:
     return float(value) if isinstance(value, (float, int)) else None
 
 
+MIN_EPOCHS = 1
+MAX_EPOCHS = 10_000
+
+
+def _clamp_int(value: object, *, default: int, min_value: int, max_value: int) -> int:
+    if isinstance(value, bool):
+        candidate = int(value)
+    elif isinstance(value, int):
+        candidate = value
+    elif isinstance(value, float):
+        candidate = int(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit():
+            candidate = int(stripped)
+        else:
+            candidate = default
+    else:
+        candidate = default
+    return min(max(candidate, min_value), max_value)
+
+
 @dataclass
 class TuiTrainingOptions:
     config: str = "configs/default.toml"
@@ -139,6 +161,7 @@ class TuiSharedState:
     focused_panel_index: int = 0
     generation_output: str = ""
     prompt_edit_mode: bool = False
+    prompt_cursor_index: int | None = None
     pending_confirmation: tuple[str, str | None] | None = None
     last_action: str = "none"
     run_scroll_offset: int = 0
@@ -163,6 +186,8 @@ def reduce_tui_state(state: TuiSharedState, event: str, value: object | None = N
         state.generation_scroll_offset = 0
     elif event == "set_prompt_edit_mode":
         state.prompt_edit_mode = bool(value)
+    elif event == "set_prompt_cursor":
+        state.prompt_cursor_index = int(value) if isinstance(value, int) else None
     elif event == "set_pending_confirmation":
         state.pending_confirmation = value if isinstance(value, tuple) else None
     elif event == "scroll_run_dashboard":
@@ -174,8 +199,10 @@ def reduce_tui_state(state: TuiSharedState, event: str, value: object | None = N
 
 
 def _validate_training_options(options: TuiTrainingOptions) -> str | None:
-    if options.epochs < 1:
-        return "epochs must be >= 1"
+    if options.epochs < MIN_EPOCHS:
+        return f"epochs must be >= {MIN_EPOCHS}"
+    if options.epochs > MAX_EPOCHS:
+        return f"epochs must be <= {MAX_EPOCHS}"
     if options.batch_size < 1:
         return "batch size must be >= 1"
     if options.seq_length < 1:
@@ -229,18 +256,55 @@ def tui_start_training(options: TuiTrainingOptions) -> tuple[bool, str]:
     )
 
 
-def tui_resume_training(run_id: str, options: TuiTrainingOptions) -> tuple[bool, str]:
+def _resolve_resume_target(
+    model_run_id: str,
+    *,
+    runs_root: Path = Path("runs"),
+    checkpoints_root: Path = Path("checkpoints"),
+) -> tuple[Path, Path]:
+    run_dir = runs_root / model_run_id
+    meta_path = run_dir / "meta.json"
+    if not run_dir.exists() or not meta_path.exists():
+        raise FileNotFoundError(
+            "run metadata not found for model "
+            f"run_id={model_run_id}; cannot resume without {meta_path}"
+        )
+
+    checkpoint_dir = checkpoints_root / model_run_id
+    if not checkpoint_dir.exists() or not checkpoint_dir.is_dir():
+        raise FileNotFoundError(f"checkpoint dir not found for model run_id={model_run_id}")
+
+    latest = checkpoint_dir / "latest.pt"
+    if latest.exists():
+        return run_dir, latest
+
+    candidates = sorted(checkpoint_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not candidates:
+        raise FileNotFoundError(f"no checkpoint files (*.pt) found for model run_id={model_run_id}")
+    return run_dir, candidates[0]
+
+
+def tui_resume_training(
+    model_run_id: str,
+    options: TuiTrainingOptions,
+    *,
+    runs_root: str | Path = "runs",
+    checkpoints_root: str | Path = "checkpoints",
+) -> tuple[bool, str]:
     error = _validate_training_options(options)
     if error:
         return (False, f"resume failed: {error}")
 
-    run_dir = Path("runs") / run_id
-    checkpoint_path = str(Path("checkpoints") / run_id / "latest.pt")
     try:
+        run_dir, checkpoint_path = _resolve_resume_target(
+            model_run_id,
+            runs_root=Path(runs_root),
+            checkpoints_root=Path(checkpoints_root),
+        )
         mode, _ = resume_training_run(
             run_dir=run_dir,
             config_path=options.config,
-            checkpoint_path=checkpoint_path,
+            checkpoint_path=str(checkpoint_path),
             more_epochs=options.epochs,
             foreground=False,
             requested_device=options.device,
@@ -250,7 +314,13 @@ def tui_resume_training(run_id: str, options: TuiTrainingOptions) -> tuple[bool,
         )
     except (DeviceResolutionError, FileNotFoundError, ValueError) as exc:
         return (False, f"resume failed: {exc}")
-    return (True, f"resumed run_id={run_id} checkpoint={checkpoint_path} mode={mode}")
+    return (
+        True,
+        "resumed "
+        f"model={model_run_id} "
+        f"checkpoint={checkpoint_path} "
+        f"mode={mode}",
+    )
 
 
 def tui_generate_from_run(run_id: str, options: TuiGenerationOptions) -> tuple[bool, str]:
@@ -444,7 +514,7 @@ def _launch_help_text(
 ) -> str:
     return (
         "Focus: tab/shift+tab or h/l or 1-5 | nav: j/k or up/down | refresh: r | "
-        "launch: s start / u resume | generate: x | edit prompt: enter, esc | "
+        "launch: s start / u resume model | generate: x | edit prompt: enter, esc | "
         "model: a activate, i inspect, A archive, D delete | "
         f"epochs +/- via [/] or +/- ({training_options.epochs}) | "
         f"prompt len={len(generation_options.prompt)}"
@@ -469,7 +539,7 @@ PANEL_SHORTCUTS = {
 PANEL_CONTEXT_HINTS = {
     "panel-a": "run list: up/down or j/k",
     "panel-b": "system monitor: refresh r",
-    "panel-c": "training: s start, u resume, +/- epochs",
+    "panel-c": "training: s start, u resume selected model, +/- epochs",
     "panel-d": "generation: enter prompt, x generate",
     "panel-e": "models: a active, i inspect, A archive, D delete",
 }
@@ -485,7 +555,7 @@ def _keyboard_help_lines(
         "Keyboard Help",
         "global: tab/shift+tab or h/l focus | 1-5 jump panel | r refresh | q quit",
         "selection: up/down or j/k on runs/models/output",
-        "train: s start(confirm) | u resume(confirm) | [/] or +/- epochs | b/B batch",
+        "train: s start(confirm) | u resume model(confirm) | [/] or +/- epochs | b/B batch",
         "generate: enter edit prompt | x generate | m/M tokens | t/T temp | k/K top_k",
         "models: a set active | i inspect | A archive(confirm) | D delete(confirm)",
         f"context: {PANEL_CONTEXT_HINTS.get(focused_panel, 'n/a')}",
@@ -635,10 +705,16 @@ def _generation_panel_lines(
     active_model_run_id: str | None,
     generation_output: str,
     prompt_edit_mode: bool,
+    prompt_cursor_index: int | None,
     *,
     output_scroll_offset: int,
     output_window: int = 8,
 ) -> tuple[list[str], int]:
+    prompt_line = generation_options.prompt
+    if prompt_edit_mode:
+        cursor = min(max(prompt_cursor_index or 0, 0), len(prompt_line))
+        prompt_line = f"{prompt_line[:cursor]}|{prompt_line[cursor:]}"
+
     output_lines = generation_output.splitlines() or ["(no generation output yet)"]
     max_offset = max(0, len(output_lines) - output_window)
     offset = min(max(output_scroll_offset, 0), max_offset)
@@ -649,7 +725,7 @@ def _generation_panel_lines(
         f"MAX_TOKENS={generation_options.max_new_tokens}",
         f"temperature={generation_options.temperature:.2f} top_k={generation_options.top_k}",
         f"prompt edit mode={'on' if prompt_edit_mode else 'off'}",
-        f"prompt: {generation_options.prompt}",
+        f"prompt: {prompt_line}",
         "keys: enter edit prompt | x generate | m/M max_tokens | t/T temperature | k/K top_k",
         "output:",
         *visible_output,
@@ -774,6 +850,7 @@ def build_tui_snapshot(
     generation_options: TuiGenerationOptions | None = None,
     generation_output: str = "",
     prompt_edit_mode: bool = False,
+    prompt_cursor_index: int | None = None,
     run_scroll_offset: int = 0,
     generation_scroll_offset: int = 0,
     pending_confirmation: str | None = None,
@@ -847,6 +924,7 @@ def build_tui_snapshot(
         active_model_run_id=effective_active_model,
         generation_output=generation_output,
         prompt_edit_mode=prompt_edit_mode,
+        prompt_cursor_index=prompt_cursor_index,
         output_scroll_offset=generation_scroll_offset,
     )
 
@@ -996,17 +1074,10 @@ def launch_tui(
         def on_key(self, event) -> None:
             key = event.key
 
-            if self.shared.prompt_edit_mode and key not in {
-                "escape",
-                "enter",
-                "backspace",
-                "delete",
-            }:
-                if len(key) == 1:
-                    self.generation_options.prompt += key
-                    reduce_tui_state(self.shared, "set_last_action", "prompt edited")
+            if self.shared.prompt_edit_mode:
+                if self._handle_prompt_edit_key(key):
                     self._refresh_content()
-                    return
+                return
 
             if self.shared.pending_confirmation:
                 self._handle_confirmation_key(key)
@@ -1089,7 +1160,12 @@ def launch_tui(
                     self.shared, "set_last_action", message if ok else f"error: {message}"
                 )
             elif action == "resume" and value:
-                ok, message = tui_resume_training(value, self.training_options)
+                ok, message = tui_resume_training(
+                    value,
+                    self.training_options,
+                    runs_root=runs_root_path,
+                    checkpoints_root=checkpoints_root_path,
+                )
                 reduce_tui_state(
                     self.shared, "set_last_action", message if ok else f"error: {message}"
                 )
@@ -1126,10 +1202,30 @@ def launch_tui(
             self._refresh_content()
 
         def _handle_launcher_keys(self, key: str) -> bool:
-            if key in {"[", "-"}:
-                self.training_options.epochs = max(1, self.training_options.epochs - 1)
-            elif key in {"]", "+"}:
-                self.training_options.epochs += 1
+            if key in {"[", "-", "minus"}:
+                self.training_options.epochs = _clamp_int(
+                    self.training_options.epochs,
+                    default=3,
+                    min_value=MIN_EPOCHS,
+                    max_value=MAX_EPOCHS,
+                )
+                self.training_options.epochs = max(MIN_EPOCHS, self.training_options.epochs - 1)
+                reduce_tui_state(
+                    self.shared, "set_last_action", f"epochs={self.training_options.epochs}"
+                )
+                return True
+            elif key in {"]", "+", "plus", "equals"}:
+                self.training_options.epochs = _clamp_int(
+                    self.training_options.epochs,
+                    default=3,
+                    min_value=MIN_EPOCHS,
+                    max_value=MAX_EPOCHS,
+                )
+                self.training_options.epochs = min(MAX_EPOCHS, self.training_options.epochs + 1)
+                reduce_tui_state(
+                    self.shared, "set_last_action", f"epochs={self.training_options.epochs}"
+                )
+                return True
             elif key == "b":
                 self.training_options.batch_size = max(1, self.training_options.batch_size - 1)
             elif key == "B":
@@ -1157,23 +1253,40 @@ def launch_tui(
                 reduce_tui_state(self.shared, "set_last_action", "confirm start training? y/n")
                 return True
             elif key == "u":
-                resume_run_id = self.shared.selected_run_id
-                if not resume_run_id:
+                snapshot = self._snapshot()
+                resume_model_run_id = snapshot.get("active_model_run_id")
+                if not isinstance(resume_model_run_id, str):
+                    legacy_run_id = self.shared.selected_run_id
+                    if isinstance(legacy_run_id, str):
+                        resume_model_run_id = legacy_run_id
+                        reduce_tui_state(
+                            self.shared,
+                            "set_last_action",
+                            "legacy fallback: resume selected run (no active model selected)",
+                        )
+                    else:
+                        reduce_tui_state(
+                            self.shared,
+                            "set_last_action",
+                            "error: no selected model to resume",
+                        )
+                        return True
+                if not resume_model_run_id:
                     reduce_tui_state(
                         self.shared,
                         "set_last_action",
-                        "error: no selected run to resume",
+                        "error: no selected model to resume",
                     )
                     return True
                 reduce_tui_state(
                     self.shared,
                     "set_pending_confirmation",
-                    ("resume", resume_run_id),
+                    ("resume", resume_model_run_id),
                 )
                 reduce_tui_state(
                     self.shared,
                     "set_last_action",
-                    f"confirm resume run_id={resume_run_id}? y/n",
+                    f"confirm resume model={resume_model_run_id}? y/n",
                 )
                 return True
             else:
@@ -1186,6 +1299,14 @@ def launch_tui(
                 reduce_tui_state(
                     self.shared, "set_prompt_edit_mode", not self.shared.prompt_edit_mode
                 )
+                if self.shared.prompt_edit_mode:
+                    reduce_tui_state(
+                        self.shared,
+                        "set_prompt_cursor",
+                        len(self.generation_options.prompt),
+                    )
+                else:
+                    reduce_tui_state(self.shared, "set_prompt_cursor", None)
                 reduce_tui_state(
                     self.shared,
                     "set_last_action",
@@ -1196,10 +1317,11 @@ def launch_tui(
                 return True
             if key in {"escape"} and self.shared.prompt_edit_mode:
                 reduce_tui_state(self.shared, "set_prompt_edit_mode", False)
+                reduce_tui_state(self.shared, "set_prompt_cursor", None)
                 reduce_tui_state(self.shared, "set_last_action", "prompt edit mode off")
                 return True
             if key in {"backspace", "delete"} and self.shared.prompt_edit_mode:
-                self.generation_options.prompt = self.generation_options.prompt[:-1]
+                self._edit_prompt_delete(key)
                 reduce_tui_state(self.shared, "set_last_action", "prompt edited")
                 return True
             if key == "m":
@@ -1246,6 +1368,66 @@ def launch_tui(
             else:
                 return False
             reduce_tui_state(self.shared, "set_last_action", f"generation control updated ({key})")
+            return True
+
+        def _edit_prompt_delete(self, key: str) -> None:
+            prompt = self.generation_options.prompt
+            cursor = min(max(self.shared.prompt_cursor_index or len(prompt), 0), len(prompt))
+            if key == "backspace":
+                if cursor <= 0:
+                    return
+                self.generation_options.prompt = prompt[: cursor - 1] + prompt[cursor:]
+                reduce_tui_state(self.shared, "set_prompt_cursor", cursor - 1)
+                return
+            if cursor >= len(prompt):
+                return
+            self.generation_options.prompt = prompt[:cursor] + prompt[cursor + 1 :]
+            reduce_tui_state(self.shared, "set_prompt_cursor", cursor)
+
+        def _insert_prompt_text(self, text: str) -> None:
+            prompt = self.generation_options.prompt
+            cursor = min(max(self.shared.prompt_cursor_index or len(prompt), 0), len(prompt))
+            self.generation_options.prompt = prompt[:cursor] + text + prompt[cursor:]
+            reduce_tui_state(self.shared, "set_prompt_cursor", cursor + len(text))
+
+        def _handle_prompt_edit_key(self, key: str) -> bool:
+            if key in {"enter", "escape"}:
+                reduce_tui_state(self.shared, "set_prompt_edit_mode", False)
+                reduce_tui_state(self.shared, "set_prompt_cursor", None)
+                reduce_tui_state(self.shared, "set_last_action", "prompt edit mode off")
+                return True
+            if key in {"backspace", "delete"}:
+                self._edit_prompt_delete(key)
+                reduce_tui_state(self.shared, "set_last_action", "prompt edited")
+                return True
+            if key == "left":
+                prompt_len = len(self.generation_options.prompt)
+                cursor = min(max(self.shared.prompt_cursor_index or prompt_len, 0), prompt_len)
+                reduce_tui_state(self.shared, "set_prompt_cursor", max(0, cursor - 1))
+                return True
+            if key == "right":
+                prompt_len = len(self.generation_options.prompt)
+                cursor = min(max(self.shared.prompt_cursor_index or prompt_len, 0), prompt_len)
+                reduce_tui_state(self.shared, "set_prompt_cursor", min(prompt_len, cursor + 1))
+                return True
+            if key == "home":
+                reduce_tui_state(self.shared, "set_prompt_cursor", 0)
+                return True
+            if key == "end":
+                reduce_tui_state(
+                    self.shared,
+                    "set_prompt_cursor",
+                    len(self.generation_options.prompt),
+                )
+                return True
+            if key == "space":
+                self._insert_prompt_text(" ")
+                reduce_tui_state(self.shared, "set_last_action", "prompt edited")
+                return True
+            if len(key) == 1:
+                self._insert_prompt_text(key)
+                reduce_tui_state(self.shared, "set_last_action", "prompt edited")
+                return True
             return True
 
         def _handle_model_keys(self, key: str) -> bool:
@@ -1314,6 +1496,7 @@ def launch_tui(
                 generation_options=self.generation_options,
                 generation_output=self.shared.generation_output,
                 prompt_edit_mode=self.shared.prompt_edit_mode,
+                prompt_cursor_index=self.shared.prompt_cursor_index,
                 run_scroll_offset=self.shared.run_scroll_offset,
                 generation_scroll_offset=self.shared.generation_scroll_offset,
                 pending_confirmation=(

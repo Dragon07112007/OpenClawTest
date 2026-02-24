@@ -10,6 +10,8 @@ import pytest
 from rich.markup import MarkupError, render
 
 from llm_trainer.tui import (
+    MAX_EPOCHS,
+    MIN_EPOCHS,
     PANEL_ORDER,
     TUI_GRID_CSS,
     TuiGenerationOptions,
@@ -278,7 +280,50 @@ def test_tui_resume_training_missing_run_errors(tmp_path, monkeypatch) -> None:
     ok, message = tui_resume_training("missing", options)
 
     assert ok is False
-    assert "resume failed" in message
+    assert "run metadata not found for model run_id=missing" in message
+
+
+def test_tui_resume_training_missing_checkpoint_errors(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": "run-1"}), encoding="utf-8")
+    (run_dir / "state.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+    options = TuiTrainingOptions()
+
+    ok, message = tui_resume_training("run-1", options)
+
+    assert ok is False
+    assert "checkpoint dir not found for model run_id=run-1" in message
+
+
+def test_tui_resume_training_uses_latest_checkpoint_fallback(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": "run-1"}), encoding="utf-8")
+    (run_dir / "state.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+    checkpoint_dir = tmp_path / "checkpoints" / "run-1"
+    checkpoint_dir.mkdir(parents=True)
+    older = checkpoint_dir / "epoch-1.pt"
+    newer = checkpoint_dir / "epoch-2.pt"
+    older.write_bytes(b"a")
+    newer.write_bytes(b"b")
+    os.utime(older, (1, 1))
+    os.utime(newer, (2, 2))
+
+    captured: dict[str, str] = {}
+
+    def fake_resume_training_run(**kwargs):
+        captured["checkpoint_path"] = kwargs["checkpoint_path"]
+        return ("background(pid=1)", 1)
+
+    monkeypatch.setattr("llm_trainer.tui.resume_training_run", fake_resume_training_run)
+    ok, message = tui_resume_training("run-1", TuiTrainingOptions())
+
+    assert ok is True
+    assert captured["checkpoint_path"].endswith("epoch-2.pt")
+    assert "resumed model=run-1" in message
 
 
 def test_tui_generate_from_run_success(monkeypatch, tmp_path) -> None:
@@ -384,7 +429,10 @@ def test_keyboard_help_lines_include_context_and_confirmation_state() -> None:
     )
 
     assert any("Keyboard Help" in line for line in lines)
-    assert any("context: training: s start, u resume, +/- epochs" in line for line in lines)
+    assert any(
+        "context: training: s start, u resume selected model, +/- epochs" in line
+        for line in lines
+    )
     assert any("prompt editor active" in line for line in lines)
     assert any("confirmation pending (delete)" in line for line in lines)
 
@@ -504,9 +552,11 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
     _write_run(tmp_path, run_id="run-1", status="running", step=1, eta_at=None)
     resumed: list[str] = []
 
-    def fake_resume(run_id: str, _options: TuiTrainingOptions) -> tuple[bool, str]:
+    def fake_resume(
+        run_id: str, _options: TuiTrainingOptions, **_kwargs
+    ) -> tuple[bool, str]:
         resumed.append(run_id)
-        return (True, f"resumed run_id={run_id}")
+        return (True, f"resumed model={run_id}")
 
     monkeypatch.setattr("llm_trainer.tui.tui_resume_training", fake_resume)
 
@@ -561,7 +611,7 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
             self.on_mount()
             for key in ["3", "u", "y"]:
                 self.on_key(type("FakeEvent", (), {"key": key})())
-            assert "resumed run_id=run-1" in self.shared.last_action
+            assert "resumed model=run-1" in self.shared.last_action
             assert self.shared.pending_confirmation is None
             assert "FOCUSED" in self._panels["panel-c"].border_title
             assert "Keyboard Help" in self._panels["panel-e"].last_update
@@ -582,6 +632,23 @@ def test_launch_tui_keyboard_resume_flow(monkeypatch, tmp_path) -> None:
 
     assert rc == 0
     assert resumed == ["run-1"]
+
+
+def test_tui_start_and_resume_validate_epoch_bounds() -> None:
+    options = TuiTrainingOptions(epochs=MAX_EPOCHS + 1)
+
+    ok_start, message_start = tui_start_training(options)
+    ok_resume, message_resume = tui_resume_training("run-1", options)
+
+    assert ok_start is False
+    assert f"epochs must be <= {MAX_EPOCHS}" in message_start
+    assert ok_resume is False
+    assert f"epochs must be <= {MAX_EPOCHS}" in message_resume
+
+    min_options = TuiTrainingOptions(epochs=MIN_EPOCHS - 1)
+    ok_min, message_min = tui_start_training(min_options)
+    assert ok_min is False
+    assert f"epochs must be >= {MIN_EPOCHS}" in message_min
 
 
 def test_delete_guard_blocks_running_model(tmp_path) -> None:

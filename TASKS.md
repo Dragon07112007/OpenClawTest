@@ -734,6 +734,62 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 38 — Fix TUI Epoch Increment/Adjustment Controls [done]
+**Goal:** Repair epoch increase/decrease behavior in the TUI training controls so epoch values can be changed reliably.
+
+### Deliverables
+- Identify and fix why epoch increment interaction does not update as expected.
+- Ensure all epoch adjustment paths are consistent:
+  - key-based increment/decrement
+  - direct input/edit flow (if present)
+  - boundary handling (min/max, non-numeric guardrails)
+- Show immediate, clear feedback in the training panel when epoch value changes.
+- Add regression tests for epoch adjustment behavior.
+
+### Acceptance
+- Epoch value can be increased/decreased reliably via intended TUI controls.
+- Invalid input cannot break launch flow.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
+## Task 39 — Resume Training by Model Selection (Not Run ID) [done]
+**Goal:** Change TUI resume flow so users resume from a selected model/checkpoint artifact rather than selecting raw run IDs.
+
+### Deliverables
+- Refactor resume UX in TUI training panel to be model-centric:
+  - choose model from Model Selection panel/list
+  - resolve latest/selected checkpoint for that model
+  - launch resume using resolved artifact
+- Update labels/help text to reflect model-based resume semantics.
+- Keep compatibility fallback for legacy run-based data where needed.
+- Add validation and clear errors for missing/invalid checkpoints.
+- Add regression/integration tests for model-based resume flow.
+
+### Acceptance
+- User can resume training by selecting a model directly.
+- Resume no longer requires manual run ID selection in normal workflow.
+- Behavior is clear when model has no resumable checkpoint.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
+## Task 40 — Fix Space Input in Generate Prompt Field [done]
+**Goal:** Ensure users can enter normal spaced text in the TUI "Generate From Model" prompt input.
+
+### Deliverables
+- Fix key handling so space characters are accepted in the generation prompt field.
+- Prevent conflicts between global keybind handling and prompt text-entry mode.
+- Verify prompt editing supports common typing behavior (space, backspace, cursor movement if supported).
+- Add regression tests for prompt input including multi-word text.
+
+### Acceptance
+- User can type prompts with spaces in Generate panel.
+- Global shortcuts do not steal space input while prompt field is active.
+- Validation passes (`ruff` + `pytest`).
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).

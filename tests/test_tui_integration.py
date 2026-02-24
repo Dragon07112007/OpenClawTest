@@ -138,10 +138,10 @@ async def test_tui_pilot_train_panel_workflow_success_and_failure(tmp_path, monk
 
     attempts = {"resume": 0}
 
-    def fake_resume(run_id: str, _options):
+    def fake_resume(run_id: str, _options, **_kwargs):
         attempts["resume"] += 1
         if attempts["resume"] == 1:
-            return (True, f"resumed run_id={run_id}")
+            return (True, f"resumed model={run_id}")
         return (False, "resume failed: synthetic failure")
 
     monkeypatch.setattr("llm_trainer.tui.tui_start_training", fake_start)
@@ -163,7 +163,7 @@ async def test_tui_pilot_train_panel_workflow_success_and_failure(tmp_path, monk
 
         await pilot.press("u", "y")
         await pilot.pause()
-        assert "last action=resumed run_id=run-1" in _panel(app, "panel-e").content
+        assert "last action=resumed model=run-1" in _panel(app, "panel-e").content
 
         await pilot.press("u", "y")
         await pilot.pause()
@@ -198,6 +198,49 @@ async def test_tui_pilot_generate_workflow_renders_output(tmp_path, monkeypatch)
         assert "MAX_TOKENS=51" in generation
         assert "temperature=1.10 top_k=51" in generation
         assert "result for run-1 prompt=Hellohiz max=51 temp=1.1 top_k=51" in generation
+
+
+@pytest.mark.anyio
+async def test_tui_pilot_epochs_controls_clamp_and_support_plus_minus_aliases(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    app = launch_tui(return_app=True, refresh_interval=0)
+    app.training_options.epochs = "x"  # type: ignore[assignment]
+
+    async with app.run_test() as pilot:
+        await pilot.press("3", "plus")
+        await pilot.pause()
+        assert "epochs=4" in _panel(app, "panel-c").content
+
+        app.training_options.epochs = 1
+        await pilot.press("minus")
+        await pilot.pause()
+        assert "epochs=1" in _panel(app, "panel-c").content
+
+        app.training_options.epochs = 10_000
+        await pilot.press("plus")
+        await pilot.pause()
+        assert "epochs=10000" in _panel(app, "panel-c").content
+
+
+@pytest.mark.anyio
+async def test_tui_pilot_prompt_edit_space_and_global_keybind_isolation(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    app = launch_tui(return_app=True, refresh_interval=0)
+
+    async with app.run_test() as pilot:
+        await pilot.press("4", "enter", "h", "space", "i", "tab", "s")
+        await pilot.pause()
+        generation = _panel(app, "panel-d").content
+        assert "prompt: Helloh i" in generation
+        assert "|" in generation
+        assert "FOCUSED" in _panel(app, "panel-d").border_title
+        assert "confirm start training? y/n" not in _panel(app, "panel-e").content
 
 
 @pytest.mark.anyio
