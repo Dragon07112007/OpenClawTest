@@ -79,11 +79,19 @@ def _is_running_status(status: str) -> bool:
     return status.lower() in {"queued", "running", "resuming"}
 
 
+def _is_active_status(status: str) -> bool:
+    return status.lower() in {"queued", "running", "resuming", "paused"}
+
+
 def _latest_runs(runs_root: Path, limit: int = 60) -> list[Path]:
     if not runs_root.exists():
         return []
     run_dirs = [p for p in runs_root.iterdir() if p.is_dir()]
     return sorted(run_dirs, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+
+
+def _as_float(value: object) -> float | None:
+    return float(value) if isinstance(value, (float, int)) else None
 
 
 @dataclass
@@ -124,6 +132,49 @@ class ModelEntry:
     checkpoint_path: Path
     mtime: float
     has_run_meta: bool
+
+
+@dataclass
+class TuiSharedState:
+    selected_index: int = 0
+    selected_run_id: str | None = None
+    selected_model_index: int = 0
+    active_model_run_id: str | None = None
+    focused_panel_index: int = 0
+    generation_output: str = ""
+    prompt_edit_mode: bool = False
+    pending_confirmation: tuple[str, str | None] | None = None
+    last_action: str = "none"
+    run_scroll_offset: int = 0
+    generation_scroll_offset: int = 0
+
+
+def reduce_tui_state(state: TuiSharedState, event: str, value: object | None = None) -> None:
+    if event == "select_run_delta":
+        delta = int(value) if isinstance(value, int) else 0
+        state.selected_index += delta
+        state.selected_run_id = None
+    elif event == "select_model_delta":
+        delta = int(value) if isinstance(value, int) else 0
+        state.selected_model_index += delta
+    elif event == "set_active_model":
+        state.active_model_run_id = str(value) if isinstance(value, str) else None
+    elif event == "set_last_action":
+        if isinstance(value, str):
+            state.last_action = value
+    elif event == "set_generation_output":
+        state.generation_output = str(value) if isinstance(value, str) else ""
+        state.generation_scroll_offset = 0
+    elif event == "set_prompt_edit_mode":
+        state.prompt_edit_mode = bool(value)
+    elif event == "set_pending_confirmation":
+        state.pending_confirmation = value if isinstance(value, tuple) else None
+    elif event == "scroll_run_dashboard":
+        delta = int(value) if isinstance(value, int) else 0
+        state.run_scroll_offset = max(0, state.run_scroll_offset + delta)
+    elif event == "scroll_generation":
+        delta = int(value) if isinstance(value, int) else 0
+        state.generation_scroll_offset = max(0, state.generation_scroll_offset + delta)
 
 
 def _validate_training_options(options: TuiTrainingOptions) -> str | None:
@@ -343,6 +394,17 @@ def delete_model_run(
     return (True, f"deleted checkpoint dir for run_id={run_id}")
 
 
+def _model_is_running(run_id: str, *, runs_root: Path) -> bool:
+    state_path = runs_root / run_id / "state.json"
+    if not state_path.exists():
+        return False
+    try:
+        state = _read_json(state_path)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return _is_active_status(str(state.get("status", "")))
+
+
 def collect_system_utilization(
     *,
     selected_run_state: dict[str, Any] | None,
@@ -353,12 +415,14 @@ def collect_system_utilization(
         gpu_data = collect_gpu_telemetry(selected_device)
 
     cpu_pct = None
+    cpu_count = None
     ram_used_mb = None
     ram_total_mb = None
     try:
         import psutil  # type: ignore[import-not-found]
 
         cpu_pct = float(psutil.cpu_percent(interval=None))
+        cpu_count = int(psutil.cpu_count(logical=True) or 0)
         mem = psutil.virtual_memory()
         ram_used_mb = round(float(mem.used) / (1024 * 1024), 1)
         ram_total_mb = round(float(mem.total) / (1024 * 1024), 1)
@@ -372,6 +436,7 @@ def collect_system_utilization(
         "gpu_temperature_c": gpu_data.get("gpu_temperature_c"),
         "gpu_power_w": gpu_data.get("gpu_power_w"),
         "cpu_utilization_pct": cpu_pct,
+        "cpu_count": cpu_count,
         "ram_used_mb": ram_used_mb,
         "ram_total_mb": ram_total_mb,
     }
@@ -432,49 +497,76 @@ def _run_detail_lines(
     ]
 
 
-def _runs_panel_lines(entries: list[RunEntry], selected: int) -> list[str]:
-    if not entries:
-        return [
-            "Runs",
-            "No runs found.",
-            "Start with: llm-trainer train --config configs/default.toml",
-        ]
+def _active_run_entries(entries: list[RunEntry]) -> list[RunEntry]:
+    return [entry for entry in entries if _is_active_status(str(entry.state.get("status", "")))]
 
-    lines = [
-        "Runs (running first, then newest)",
-        "ID | status | epoch | step | loss | device | eta/remaining | gpu",
-    ]
-    for idx, entry in enumerate(entries):
+
+def _runs_panel_lines(
+    entries: list[RunEntry],
+    *,
+    selected: int,
+    scroll_offset: int,
+    window_size: int = 10,
+) -> tuple[list[str], int]:
+    lines = ["Run Dashboard", "RUN_ID | Status | Epoch | Loss | Device | ETA | GPU%"]
+    if not entries:
+        lines.append("No active runs.")
+        return lines, 0
+
+    selected = min(max(selected, 0), len(entries) - 1)
+    max_offset = max(0, len(entries) - window_size)
+    offset = min(max(scroll_offset, 0), max_offset)
+    if selected < offset:
+        offset = selected
+    if selected >= offset + window_size:
+        offset = selected - window_size + 1
+
+    visible = entries[offset : offset + window_size]
+    for idx, entry in enumerate(visible, start=offset):
         state = entry.state
         marker = ">" if idx == selected else " "
         lines.append(
             f"{marker} {entry.run_id} | {state.get('status', 'unknown')} | "
-            f"{state.get('epoch', 'n/a')} | {state.get('global_step', 'n/a')} | "
-            f"{_fmt_loss(state.get('train_loss'))} | "
+            f"{state.get('epoch', 'n/a')} | {_fmt_loss(state.get('train_loss'))} | "
             f"{entry.meta.get('selected_device', entry.meta.get('device', 'n/a'))} | "
-            f"{_fmt_eta(state.get('eta_at'))}/{_fmt_duration(state.get('remaining_seconds'))} | "
-            f"{_fmt_gpu(state)}"
+            f"{_fmt_eta(state.get('eta_at'))} | "
+            f"{_fmt_float(state.get('gpu_utilization_pct'), '%')}"
         )
-    return lines
+    if len(entries) > window_size:
+        lines.append(f"Showing {offset + 1}-{offset + len(visible)} of {len(entries)} active runs")
+    return lines, offset
+
+
+def _aggregate_active_remaining_time(entries: list[RunEntry]) -> str:
+    active = _active_run_entries(entries)
+    if not active:
+        return "No active training"
+
+    total_seconds = 0.0
+    saw_value = False
+    for entry in active:
+        remaining = _as_float(entry.state.get("remaining_seconds"))
+        if remaining is not None:
+            total_seconds += max(0.0, remaining)
+            saw_value = True
+    if not saw_value:
+        return "n/a"
+    return _fmt_duration(total_seconds)
 
 
 def _launcher_panel_lines(
     training_options: TuiTrainingOptions,
-    selected_run_id: str | None,
+    active_model_run_id: str | None,
     pending_confirmation: str | None,
 ) -> list[str]:
     return [
-        "Training Launcher",
+        "Train Selected Model",
+        f"Selected Model: {active_model_run_id or 'none'}",
+        f"epochs={training_options.epochs}",
+        f"device={training_options.device}",
+        f"batch_size={training_options.batch_size}",
         f"config={training_options.config}",
-        "options: "
-        f"epochs={training_options.epochs} batch={training_options.batch_size} "
-        f"seq={training_options.seq_length}",
-        "options: "
-        f"device={training_options.device} strict={training_options.strict_device} "
-        f"precision={training_options.precision} grad_accum={training_options.grad_accum_steps}",
-        f"target run for resume={selected_run_id or 'n/a'}",
-        "keys: s start | u resume selected | [/] epochs | b/B batch | l/L seq | "
-        "d device | p precision | g/G grad_accum | v strict",
+        "keys: s start | [/] epochs | b/B batch | d device | p precision | v strict",
         f"confirmation={pending_confirmation or 'none'}",
     ]
 
@@ -484,40 +576,78 @@ def _generation_panel_lines(
     active_model_run_id: str | None,
     generation_output: str,
     prompt_edit_mode: bool,
-) -> list[str]:
-    truncated_output = (
-        generation_output if len(generation_output) <= 500 else generation_output[:500] + "..."
-    )
+    *,
+    output_scroll_offset: int,
+    output_window: int = 8,
+) -> tuple[list[str], int]:
+    output_lines = generation_output.splitlines() or ["(no generation output yet)"]
+    max_offset = max(0, len(output_lines) - output_window)
+    offset = min(max(output_scroll_offset, 0), max_offset)
+    visible_output = output_lines[offset : offset + output_window]
     return [
-        "Generation Workspace",
-        f"active model run={active_model_run_id or 'none selected'}",
-        "controls: "
-        f"max_new_tokens={generation_options.max_new_tokens} "
+        "Generate From Model",
+        f"Selected Model: {active_model_run_id or 'none'}",
+        f"MAX_TOKENS={generation_options.max_new_tokens}",
         f"temperature={generation_options.temperature:.2f} top_k={generation_options.top_k}",
         f"prompt edit mode={'on' if prompt_edit_mode else 'off'}",
         f"prompt: {generation_options.prompt}",
-        "keys: enter edit prompt | x generate | m/M max_new_tokens | t/T temperature | "
-        "k/K top_k",
+        "keys: enter edit prompt | x generate | m/M max_tokens | t/T temperature | k/K top_k",
         "output:",
-        truncated_output or "(no generation output yet)",
-    ]
+        *visible_output,
+        (
+            f"output lines {offset + 1}-{offset + len(visible_output)} of {len(output_lines)}"
+            if len(output_lines) > output_window
+            else "output lines 1-1 of 1"
+            if output_lines == ["(no generation output yet)"]
+            else f"output lines {offset + 1}-{offset + len(visible_output)} of {len(output_lines)}"
+        ),
+    ], offset
 
 
-def _utilization_panel_lines(system: dict[str, Any], selected_device: str) -> list[str]:
-    return [
-        "System Utilization",
+def _utilization_panel_lines(
+    system: dict[str, Any],
+    selected_device: str,
+    *,
+    aggregate_remaining_time: str,
+) -> list[str]:
+    lines = [
+        "System Dashboard",
         f"device={selected_device}",
         "GPU: "
-        f"util={_fmt_float(system.get('gpu_utilization_pct'), '%')} "
-        f"vram={_fmt_float(system.get('gpu_memory_used_mb'))}/"
-        f"{_fmt_float(system.get('gpu_memory_total_mb'))}MB",
-        "GPU: "
-        f"temp={_fmt_float(system.get('gpu_temperature_c'), 'C')} "
-        f"power={_fmt_float(system.get('gpu_power_w'), 'W')}",
-        f"CPU: {_fmt_float(system.get('cpu_utilization_pct'), '%')}",
+        f"Usage={_fmt_float(system.get('gpu_utilization_pct'), '%')} "
+        f"VRAM={_fmt_float(system.get('gpu_memory_used_mb'))}/"
+        f"{_fmt_float(system.get('gpu_memory_total_mb'))}MB "
+        f"Temp={_fmt_float(system.get('gpu_temperature_c'), 'C')}",
+        "CPU: "
+        f"Usage={_fmt_float(system.get('cpu_utilization_pct'), '%')} "
+        f"Cores={system.get('cpu_count', 'n/a')}",
         "RAM: "
         f"{_fmt_float(system.get('ram_used_mb'))}/{_fmt_float(system.get('ram_total_mb'))}MB",
     ]
+    if aggregate_remaining_time == "No active training":
+        lines.append("No active training")
+    else:
+        lines.append(f"Aggregate remaining: {aggregate_remaining_time}")
+    return lines
+
+
+def _model_size_mb(checkpoint_path: Path) -> float:
+    try:
+        return round(checkpoint_path.stat().st_size / (1024 * 1024), 1)
+    except OSError:
+        return 0.0
+
+
+def _model_status(run_id: str, *, runs_root: Path) -> str:
+    state_path = runs_root / run_id / "state.json"
+    if not state_path.exists():
+        return "orphan"
+    try:
+        state = _read_json(state_path)
+    except (OSError, json.JSONDecodeError):
+        return "corrupted"
+    status = str(state.get("status", "unknown"))
+    return "training" if _is_active_status(status) else status
 
 
 def _models_panel_lines(
@@ -525,11 +655,12 @@ def _models_panel_lines(
     *,
     selected_model_index: int,
     active_model_run_id: str | None,
+    runs_root: Path,
 ) -> tuple[list[str], int, str | None]:
     if not models:
         return (
             [
-                "Model Manager",
+                "Model Selection",
                 "No checkpoints found.",
                 "Trained runs with checkpoints will appear here.",
             ],
@@ -539,21 +670,35 @@ def _models_panel_lines(
 
     selected = min(max(selected_model_index, 0), len(models) - 1)
     latest_run_id = models[0].run_id
-    lines = ["Model Manager", "run_id | checkpoint | flags"]
+    lines = [
+        "Model Selection",
+        "name | trained | epochs | final loss | disk size | status",
+    ]
     for idx, model in enumerate(models):
         marker = ">" if idx == selected else " "
-        flags: list[str] = []
+        trained_text = datetime.fromtimestamp(model.mtime, tz=UTC).strftime("%Y-%m-%d %H:%M")
+        epochs = "n/a"
+        final_loss = "n/a"
+        state_path = runs_root / model.run_id / "state.json"
+        if state_path.exists():
+            try:
+                state = _read_json(state_path)
+                epochs = str(state.get("epoch", "n/a"))
+                final_loss = _fmt_loss(state.get("train_loss"))
+            except (OSError, json.JSONDecodeError):
+                final_loss = "corrupted"
+
+        status = _model_status(model.run_id, runs_root=runs_root)
         if model.run_id == latest_run_id:
-            flags.append("latest")
+            status = f"{status},latest"
         if model.run_id == active_model_run_id:
-            flags.append("active")
-        if not model.has_run_meta:
-            flags.append("orphan")
+            status = f"{status},active"
         lines.append(
-            f"{marker} {model.run_id} | {model.checkpoint_path.name} | "
-            f"{','.join(flags) if flags else '-'}"
+            f"{marker} {model.run_id} | {trained_text} | {epochs} | {final_loss} | "
+            f"{_model_size_mb(model.checkpoint_path):.1f}MB | {status}"
         )
-    lines.append("keys: a activate | i inspect | A archive(confirm) | D delete(confirm)")
+    lines.append(f"Latest trained model: {latest_run_id}")
+    lines.append("controls: a Set as Active | D Delete(confirm) | r Refresh | i Inspect")
     return lines, selected, models[selected].run_id
 
 
@@ -570,6 +715,8 @@ def build_tui_snapshot(
     generation_options: TuiGenerationOptions | None = None,
     generation_output: str = "",
     prompt_edit_mode: bool = False,
+    run_scroll_offset: int = 0,
+    generation_scroll_offset: int = 0,
     pending_confirmation: str | None = None,
     last_action: str | None = None,
 ) -> dict[str, object]:
@@ -603,11 +750,17 @@ def build_tui_snapshot(
         models,
         selected_model_index=selected_model_index,
         active_model_run_id=active_model_run_id,
+        runs_root=runs_root_path,
     )
 
     effective_active_model = active_model_run_id
+    known_model_ids = {m.run_id for m in models}
+    if effective_active_model not in known_model_ids:
+        effective_active_model = None
     if effective_active_model is None and selected_model_run_id:
         effective_active_model = selected_model_run_id
+    if effective_active_model is None and models:
+        effective_active_model = models[0].run_id
 
     selected_device = "cpu"
     if selected_entry:
@@ -619,9 +772,29 @@ def build_tui_snapshot(
         selected_device=selected_device,
     )
 
+    active_entries = _active_run_entries(entries)
+    resolved_selected = _resolve_selected_index(
+        active_entries,
+        selected_index,
+        selected_run_id if selected_run_id in {entry.run_id for entry in active_entries} else None,
+    )
+    runs_lines, resolved_run_scroll_offset = _runs_panel_lines(
+        active_entries,
+        selected=resolved_selected,
+        scroll_offset=run_scroll_offset,
+    )
+    generation_lines, resolved_generation_scroll_offset = _generation_panel_lines(
+        generation_options,
+        active_model_run_id=effective_active_model,
+        generation_output=generation_output,
+        prompt_edit_mode=prompt_edit_mode,
+        output_scroll_offset=generation_scroll_offset,
+    )
+
     status_lines = [
         "Dashboard Status",
         f"selected run={selected_run_value or 'none'}",
+        f"active runs={len(active_entries)}",
         f"selected model={selected_model_run_id or 'none'}",
         f"active model={effective_active_model or 'none'}",
         f"last action={last_action or 'none'}",
@@ -636,35 +809,84 @@ def build_tui_snapshot(
         detail.extend(load_errors[:3])
 
     return {
-        "runs": _runs_panel_lines(entries, selected),
+        "runs": runs_lines,
         "detail": detail,
         "launcher": _launcher_panel_lines(
             training_options,
-            selected_run_id=selected_run_value,
+            active_model_run_id=effective_active_model,
             pending_confirmation=pending_confirmation,
         ),
-        "generation": _generation_panel_lines(
-            generation_options,
-            active_model_run_id=effective_active_model,
-            generation_output=generation_output,
-            prompt_edit_mode=prompt_edit_mode,
+        "generation": generation_lines,
+        "utilization": _utilization_panel_lines(
+            system,
+            selected_device=selected_device,
+            aggregate_remaining_time=_aggregate_active_remaining_time(entries),
         ),
-        "utilization": _utilization_panel_lines(system, selected_device=selected_device),
         "models": models_lines,
         "status": status_lines,
         "error": bool(load_errors),
-        "selected": selected,
-        "selected_run_id": selected_run_value,
+        "selected": resolved_selected,
+        "selected_run_id": active_entries[resolved_selected].run_id if active_entries else None,
+        "run_scroll_offset": resolved_run_scroll_offset,
+        "generation_scroll_offset": resolved_generation_scroll_offset,
         "selected_model_index": resolved_model_index,
         "selected_model_run_id": selected_model_run_id,
         "active_model_run_id": effective_active_model,
     }
 
 
+TUI_GRID_CSS = """
+Screen {
+    layout: vertical;
+}
+#grid {
+    height: 1fr;
+    padding: 1;
+    layout: grid;
+    grid-size: 2 3;
+    grid-columns: 3fr 2fr;
+    grid-rows: 1fr 1fr 1fr;
+    grid-gutter: 1 1;
+}
+.panel {
+    border: round #6689a1;
+    border-title-align: center;
+    padding: 0 1;
+    overflow-y: auto;
+}
+#panel-a {
+    column: 1;
+    row: 1;
+    border: round #5d7fa7;
+}
+#panel-b {
+    column: 2;
+    row: 1;
+    border: round #a17f66;
+}
+#panel-c {
+    column: 1;
+    row: 2;
+    border: round #7a77a0;
+}
+#panel-d {
+    column: 1;
+    row: 3;
+    border: round #99865c;
+}
+#panel-e {
+    column: 2;
+    row: 2;
+    row-span: 2;
+    border: round #608a91;
+}
+"""
+
+
 def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> int:
     try:
         from textual.app import App, ComposeResult
-        from textual.containers import Horizontal, Vertical
+        from textual.containers import Grid
         from textual.widgets import Footer, Header, Static
     except ModuleNotFoundError:
         print("tui failed (missing dependency: textual)")
@@ -674,120 +896,60 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
     checkpoints_root_path = Path("checkpoints")
 
     class MonitorApp(App):
-        CSS = """
-        Screen {
-            layout: vertical;
-        }
-        #dashboard {
-            height: 1fr;
-            padding: 1;
-        }
-        .column {
-            height: 1fr;
-            padding-right: 1;
-        }
-        #left-col {
-            width: 29%;
-        }
-        #center-col {
-            width: 24%;
-        }
-        #right-col {
-            width: 25%;
-        }
-        #far-right-col {
-            width: 22%;
-            padding-right: 0;
-        }
-        .panel {
-            border: round #6689a1;
-            padding: 0 1;
-            margin-bottom: 1;
-        }
-        #status {
-            border: heavy #4f8f72;
-            height: 15;
-        }
-        #generation {
-            border: round #99865c;
-            height: 1fr;
-            margin-bottom: 0;
-        }
-        #launcher {
-            border: round #7a77a0;
-            height: 1fr;
-            margin-bottom: 0;
-        }
-        #runs {
-            border: round #5d7fa7;
-            height: 1fr;
-        }
-        #utilization {
-            border: round #a17f66;
-            height: 11;
-            margin-bottom: 0;
-        }
-        #models {
-            border: round #608a91;
-            height: 1fr;
-            margin-bottom: 0;
-        }
-        """
-
-        selected_index = 0
-        selected_run_id: str | None = None
-        selected_model_index = 0
-        active_model_run_id: str | None = None
-        focused_panel_index = 0
-        panel_order = ["runs", "launcher", "generation", "models"]
+        CSS = TUI_GRID_CSS
+        panel_order = ["panel-a", "panel-c", "panel-d", "panel-e"]
 
         def __init__(self) -> None:
             super().__init__()
+            self.shared = TuiSharedState()
             self.training_options = TuiTrainingOptions()
             self.generation_options = TuiGenerationOptions()
-            self.last_action = "none"
-            self.generation_output = ""
-            self.prompt_edit_mode = False
-            self.pending_confirmation: tuple[str, str | None] | None = None
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
-            with Horizontal(id="dashboard"):
-                with Vertical(id="left-col", classes="column"):
-                    yield Static("", id="status", classes="panel")
-                    yield Static("", id="generation", classes="panel")
-                with Vertical(id="center-col", classes="column"):
-                    yield Static("", id="launcher", classes="panel")
-                with Vertical(id="right-col", classes="column"):
-                    yield Static("", id="runs", classes="panel")
-                    yield Static("", id="utilization", classes="panel")
-                with Vertical(id="far-right-col", classes="column"):
-                    yield Static("", id="models", classes="panel")
+            with Grid(id="grid"):
+                yield Static("", id="panel-a", classes="panel")
+                yield Static("", id="panel-b", classes="panel")
+                yield Static("", id="panel-c", classes="panel")
+                yield Static("", id="panel-d", classes="panel")
+                yield Static("", id="panel-e", classes="panel")
             yield Footer()
 
         def on_mount(self) -> None:
+            self.query_one("#panel-a", Static).border_title = "Run Dashboard"
+            self.query_one("#panel-b", Static).border_title = "System Dashboard"
+            self.query_one("#panel-c", Static).border_title = "Train Selected Model"
+            self.query_one("#panel-d", Static).border_title = "Generate From Model"
+            self.query_one("#panel-e", Static).border_title = "Model Selection"
             self.set_interval(1.0, self._refresh_content)
             self._refresh_content()
 
         def _focused_panel(self) -> str:
-            return self.panel_order[self.focused_panel_index]
+            return self.panel_order[self.shared.focused_panel_index]
 
         def _cycle_focus(self, reverse: bool = False) -> None:
             delta = -1 if reverse else 1
-            self.focused_panel_index = (self.focused_panel_index + delta) % len(self.panel_order)
-            self.last_action = f"focus={self._focused_panel()}"
+            self.shared.focused_panel_index = (
+                self.shared.focused_panel_index + delta
+            ) % len(self.panel_order)
+            reduce_tui_state(self.shared, "set_last_action", f"focus={self._focused_panel()}")
 
         def on_key(self, event) -> None:
             key = event.key
 
-            if self.prompt_edit_mode and key not in {"escape", "enter", "backspace", "delete"}:
+            if self.shared.prompt_edit_mode and key not in {
+                "escape",
+                "enter",
+                "backspace",
+                "delete",
+            }:
                 if len(key) == 1:
                     self.generation_options.prompt += key
-                    self.last_action = "prompt edited"
+                    reduce_tui_state(self.shared, "set_last_action", "prompt edited")
                     self._refresh_content()
                     return
 
-            if self.pending_confirmation:
+            if self.shared.pending_confirmation:
                 self._handle_confirmation_key(key)
                 return
 
@@ -805,72 +967,91 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
 
             if key in {"j", "down"}:
                 panel = self._focused_panel()
-                if panel == "runs":
-                    self.selected_index += 1
-                    self.selected_run_id = None
-                elif panel == "models":
-                    self.selected_model_index += 1
+                if panel == "panel-a":
+                    reduce_tui_state(self.shared, "select_run_delta", 1)
+                elif panel == "panel-d":
+                    reduce_tui_state(self.shared, "scroll_generation", 1)
+                elif panel == "panel-e":
+                    reduce_tui_state(self.shared, "select_model_delta", 1)
                 self._refresh_content()
                 return
 
             if key in {"k", "up"}:
                 panel = self._focused_panel()
-                if panel == "runs":
-                    self.selected_index -= 1
-                    self.selected_run_id = None
-                elif panel == "models":
-                    self.selected_model_index -= 1
+                if panel == "panel-a":
+                    reduce_tui_state(self.shared, "select_run_delta", -1)
+                elif panel == "panel-d":
+                    reduce_tui_state(self.shared, "scroll_generation", -1)
+                elif panel == "panel-e":
+                    reduce_tui_state(self.shared, "select_model_delta", -1)
                 self._refresh_content()
                 return
 
-            if self._focused_panel() == "launcher":
+            if self._focused_panel() == "panel-c":
                 if self._handle_launcher_keys(key):
                     self._refresh_content()
                     return
-            if self._focused_panel() == "generation":
+            if self._focused_panel() == "panel-d":
                 if self._handle_generation_keys(key):
                     self._refresh_content()
                     return
-            if self._focused_panel() == "models":
+            if self._focused_panel() == "panel-e":
                 if self._handle_model_keys(key):
                     self._refresh_content()
                     return
 
-            snapshot = self._snapshot()
-            selected_run_id = snapshot.get("selected_run_id")
-            if key == "u" and isinstance(selected_run_id, str):
-                self.pending_confirmation = ("resume", selected_run_id)
-                self.last_action = f"confirm resume run_id={selected_run_id}? y/n"
-                self._refresh_content()
-
         def _handle_confirmation_key(self, key: str) -> None:
-            assert self.pending_confirmation is not None
-            action, value = self.pending_confirmation
+            assert self.shared.pending_confirmation is not None
+            action, value = self.shared.pending_confirmation
             if key in {"n", "escape"}:
-                self.last_action = "action canceled"
-                self.pending_confirmation = None
+                reduce_tui_state(self.shared, "set_last_action", "action canceled")
+                reduce_tui_state(self.shared, "set_pending_confirmation", None)
                 self._refresh_content()
                 return
             if key != "y":
                 return
 
-            self.pending_confirmation = None
+            reduce_tui_state(self.shared, "set_pending_confirmation", None)
             if action == "start":
                 ok, message = tui_start_training(self.training_options)
-                self.last_action = message if ok else f"error: {message}"
+                reduce_tui_state(
+                    self.shared, "set_last_action", message if ok else f"error: {message}"
+                )
             elif action == "resume" and value:
                 ok, message = tui_resume_training(value, self.training_options)
-                self.last_action = message if ok else f"error: {message}"
+                reduce_tui_state(
+                    self.shared, "set_last_action", message if ok else f"error: {message}"
+                )
             elif action == "archive" and value:
+                if _model_is_running(value, runs_root=runs_root_path):
+                    reduce_tui_state(
+                        self.shared,
+                        "set_last_action",
+                        f"error: archive blocked; run_id={value} is active",
+                    )
+                    self._refresh_content()
+                    return
                 ok, message = archive_model_run(value, checkpoints_root=checkpoints_root_path)
-                self.last_action = message if ok else f"error: {message}"
-                if self.active_model_run_id == value and ok:
-                    self.active_model_run_id = None
+                reduce_tui_state(
+                    self.shared, "set_last_action", message if ok else f"error: {message}"
+                )
+                if self.shared.active_model_run_id == value and ok:
+                    reduce_tui_state(self.shared, "set_active_model", None)
             elif action == "delete" and value:
+                if _model_is_running(value, runs_root=runs_root_path):
+                    reduce_tui_state(
+                        self.shared,
+                        "set_last_action",
+                        f"error: delete blocked; run_id={value} is active",
+                    )
+                    self._refresh_content()
+                    return
                 ok, message = delete_model_run(value, checkpoints_root=checkpoints_root_path)
-                self.last_action = message if ok else f"error: {message}"
-                if self.active_model_run_id == value and ok:
-                    self.active_model_run_id = None
+                reduce_tui_state(
+                    self.shared, "set_last_action", message if ok else f"error: {message}"
+                )
+                if self.shared.active_model_run_id == value and ok:
+                    reduce_tui_state(self.shared, "set_active_model", None)
             self._refresh_content()
 
         def _handle_launcher_keys(self, key: str) -> bool:
@@ -882,16 +1063,6 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 self.training_options.batch_size = max(1, self.training_options.batch_size - 1)
             elif key == "B":
                 self.training_options.batch_size += 1
-            elif key == "l":
-                self.training_options.seq_length = max(1, self.training_options.seq_length - 1)
-            elif key == "L":
-                self.training_options.seq_length += 1
-            elif key == "g":
-                self.training_options.grad_accum_steps = max(
-                    1, self.training_options.grad_accum_steps - 1
-                )
-            elif key == "G":
-                self.training_options.grad_accum_steps += 1
             elif key == "v":
                 self.training_options.strict_device = not self.training_options.strict_device
             elif key == "d":
@@ -911,37 +1082,34 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 )
                 self.training_options.precision = modes[(current + 1) % len(modes)]
             elif key == "s":
-                self.pending_confirmation = ("start", None)
-                self.last_action = "confirm start training? y/n"
-                return True
-            elif key == "u":
-                snapshot = self._snapshot()
-                selected_run_id = snapshot.get("selected_run_id")
-                if isinstance(selected_run_id, str):
-                    self.pending_confirmation = ("resume", selected_run_id)
-                    self.last_action = f"confirm resume run_id={selected_run_id}? y/n"
-                else:
-                    self.last_action = "error: no selected run for resume"
+                reduce_tui_state(self.shared, "set_pending_confirmation", ("start", None))
+                reduce_tui_state(self.shared, "set_last_action", "confirm start training? y/n")
                 return True
             else:
                 return False
-            self.last_action = f"launcher updated ({key})"
+            reduce_tui_state(self.shared, "set_last_action", f"launcher updated ({key})")
             return True
 
         def _handle_generation_keys(self, key: str) -> bool:
             if key == "enter":
-                self.prompt_edit_mode = not self.prompt_edit_mode
-                self.last_action = (
-                    "prompt edit mode on" if self.prompt_edit_mode else "prompt edit mode off"
+                reduce_tui_state(
+                    self.shared, "set_prompt_edit_mode", not self.shared.prompt_edit_mode
+                )
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    "prompt edit mode on"
+                    if self.shared.prompt_edit_mode
+                    else "prompt edit mode off",
                 )
                 return True
-            if key in {"escape"} and self.prompt_edit_mode:
-                self.prompt_edit_mode = False
-                self.last_action = "prompt edit mode off"
+            if key in {"escape"} and self.shared.prompt_edit_mode:
+                reduce_tui_state(self.shared, "set_prompt_edit_mode", False)
+                reduce_tui_state(self.shared, "set_last_action", "prompt edit mode off")
                 return True
-            if key in {"backspace", "delete"} and self.prompt_edit_mode:
+            if key in {"backspace", "delete"} and self.shared.prompt_edit_mode:
                 self.generation_options.prompt = self.generation_options.prompt[:-1]
-                self.last_action = "prompt edited"
+                reduce_tui_state(self.shared, "set_last_action", "prompt edited")
                 return True
             if key == "m":
                 self.generation_options.max_new_tokens = max(
@@ -963,47 +1131,82 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 self.generation_options.top_k += 1
             elif key == "x":
                 snapshot = self._snapshot()
-                model_run = snapshot.get("active_model_run_id") or snapshot.get("selected_run_id")
+                model_run = snapshot.get("active_model_run_id")
                 if not isinstance(model_run, str):
-                    self.last_action = "error: no selected model/checkpoint"
+                    reduce_tui_state(
+                        self.shared,
+                        "set_last_action",
+                        "error: no selected model/checkpoint",
+                    )
                     return True
                 ok, message = tui_generate_from_run(model_run, self.generation_options)
-                self.last_action = message if ok else f"error: {message}"
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    message if ok else f"error: {message}",
+                )
                 if ok:
-                    self.generation_output = (
-                        message.split("\n", 1)[1] if "\n" in message else message
+                    reduce_tui_state(
+                        self.shared,
+                        "set_generation_output",
+                        message.split("\n", 1)[1] if "\n" in message else message,
                     )
                 return True
             else:
                 return False
-            self.last_action = f"generation control updated ({key})"
+            reduce_tui_state(self.shared, "set_last_action", f"generation control updated ({key})")
             return True
 
         def _handle_model_keys(self, key: str) -> bool:
             snapshot = self._snapshot()
             selected_model_run_id = snapshot.get("selected_model_run_id")
             if not isinstance(selected_model_run_id, str):
-                self.last_action = "error: no model selected"
+                reduce_tui_state(self.shared, "set_last_action", "error: no model selected")
                 return key in {"a", "i", "A", "D"}
 
             if key == "a":
-                self.active_model_run_id = selected_model_run_id
-                self.last_action = f"active model set run_id={selected_model_run_id}"
+                reduce_tui_state(self.shared, "set_active_model", selected_model_run_id)
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    f"active model set run_id={selected_model_run_id}",
+                )
                 return True
             if key == "i":
                 checkpoint = Path("checkpoints") / selected_model_run_id / "latest.pt"
                 exists = checkpoint.exists()
-                self.last_action = (
-                    f"model run_id={selected_model_run_id} checkpoint={checkpoint} exists={exists}"
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    f"model run_id={selected_model_run_id} checkpoint={checkpoint} exists={exists}",
                 )
                 return True
             if key == "A":
-                self.pending_confirmation = ("archive", selected_model_run_id)
-                self.last_action = f"confirm archive run_id={selected_model_run_id}? y/n"
+                reduce_tui_state(
+                    self.shared,
+                    "set_pending_confirmation",
+                    ("archive", selected_model_run_id),
+                )
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    f"confirm archive run_id={selected_model_run_id}? y/n",
+                )
                 return True
             if key == "D":
-                self.pending_confirmation = ("delete", selected_model_run_id)
-                self.last_action = f"confirm delete run_id={selected_model_run_id}? y/n"
+                reduce_tui_state(
+                    self.shared,
+                    "set_pending_confirmation",
+                    ("delete", selected_model_run_id),
+                )
+                reduce_tui_state(
+                    self.shared,
+                    "set_last_action",
+                    f"confirm delete run_id={selected_model_run_id}? y/n",
+                )
+                return True
+            if key == "r":
+                reduce_tui_state(self.shared, "set_last_action", "model list refreshed")
                 return True
             return False
 
@@ -1012,44 +1215,55 @@ def launch_tui(*, runs_root: str | Path = "runs", run_id: str | None = None) -> 
                 runs_root=runs_root_path,
                 checkpoints_root=checkpoints_root_path,
                 run_id=run_id,
-                selected_index=self.selected_index,
-                selected_run_id=self.selected_run_id,
-                selected_model_index=self.selected_model_index,
-                active_model_run_id=self.active_model_run_id,
+                selected_index=self.shared.selected_index,
+                selected_run_id=self.shared.selected_run_id,
+                selected_model_index=self.shared.selected_model_index,
+                active_model_run_id=self.shared.active_model_run_id,
                 training_options=self.training_options,
                 generation_options=self.generation_options,
-                generation_output=self.generation_output,
-                prompt_edit_mode=self.prompt_edit_mode,
+                generation_output=self.shared.generation_output,
+                prompt_edit_mode=self.shared.prompt_edit_mode,
+                run_scroll_offset=self.shared.run_scroll_offset,
+                generation_scroll_offset=self.shared.generation_scroll_offset,
                 pending_confirmation=(
-                    self.pending_confirmation[0] if self.pending_confirmation else None
+                    self.shared.pending_confirmation[0]
+                    if self.shared.pending_confirmation
+                    else None
                 ),
-                last_action=self.last_action,
+                last_action=self.shared.last_action,
             )
 
         def _refresh_content(self) -> None:
             snapshot = self._snapshot()
-            self.selected_index = int(snapshot.get("selected", 0))
+            self.shared.selected_index = int(snapshot.get("selected", 0))
             selected_run_id = snapshot.get("selected_run_id")
-            self.selected_run_id = selected_run_id if isinstance(selected_run_id, str) else None
-            self.selected_model_index = int(snapshot.get("selected_model_index", 0))
-            active_model = snapshot.get("active_model_run_id")
-            self.active_model_run_id = active_model if isinstance(active_model, str) else None
-
-            self.query_one("#runs", Static).update(_join_markup_safe(snapshot["runs"]))
-            self.query_one("#launcher", Static).update(_join_markup_safe(snapshot["launcher"]))
-            self.query_one("#generation", Static).update(_join_markup_safe(snapshot["generation"]))
-            self.query_one("#utilization", Static).update(
-                _join_markup_safe(snapshot["utilization"])
+            self.shared.selected_run_id = (
+                selected_run_id if isinstance(selected_run_id, str) else None
             )
-            self.query_one("#models", Static).update(_join_markup_safe(snapshot["models"]))
+            self.shared.selected_model_index = int(snapshot.get("selected_model_index", 0))
+            self.shared.run_scroll_offset = int(snapshot.get("run_scroll_offset", 0))
+            self.shared.generation_scroll_offset = int(snapshot.get("generation_scroll_offset", 0))
+            active_model = snapshot.get("active_model_run_id")
+            self.shared.active_model_run_id = (
+                active_model if isinstance(active_model, str) else None
+            )
 
-            status_lines = list(snapshot["status"])
-            status_lines.append(f"focus={self._focused_panel()}")
-            if self.prompt_edit_mode:
-                status_lines.append("prompt editor active")
-            if self.pending_confirmation:
-                status_lines.append(f"awaiting confirm: {self.pending_confirmation[0]} (y/n)")
-            self.query_one("#status", Static).update(_join_markup_safe(status_lines))
+            self.query_one("#panel-a", Static).update(_join_markup_safe(snapshot["runs"]))
+            self.query_one("#panel-b", Static).update(_join_markup_safe(snapshot["utilization"]))
+            self.query_one("#panel-c", Static).update(_join_markup_safe(snapshot["launcher"]))
+            self.query_one("#panel-d", Static).update(_join_markup_safe(snapshot["generation"]))
+
+            panel_e_lines = list(snapshot["models"])
+            panel_e_lines.append("")
+            panel_e_lines.extend(snapshot["status"])
+            panel_e_lines.append(f"focus={self._focused_panel()}")
+            if self.shared.prompt_edit_mode:
+                panel_e_lines.append("prompt editor active")
+            if self.shared.pending_confirmation:
+                panel_e_lines.append(
+                    f"awaiting confirm: {self.shared.pending_confirmation[0]} (y/n)"
+                )
+            self.query_one("#panel-e", Static).update(_join_markup_safe(panel_e_lines))
 
     MonitorApp().run()
     return 0

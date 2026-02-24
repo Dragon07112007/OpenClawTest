@@ -9,11 +9,14 @@ import pytest
 from rich.markup import MarkupError, render
 
 from llm_trainer.tui import (
+    TUI_GRID_CSS,
     TuiGenerationOptions,
     TuiTrainingOptions,
+    _aggregate_active_remaining_time,
     _join_markup_safe,
     _launch_help_text,
     _markup_safe,
+    _model_is_running,
     archive_model_run,
     build_tui_snapshot,
     collect_model_entries,
@@ -83,11 +86,12 @@ def test_build_tui_snapshot_empty_state(tmp_path) -> None:
         checkpoints_root=tmp_path / "checkpoints",
     )
 
-    assert snapshot["runs"][0] == "Runs"
+    assert snapshot["runs"][0] == "Run Dashboard"
     assert snapshot["detail"][0] == "Empty state"
-    assert snapshot["generation"][0] == "Generation Workspace"
-    assert snapshot["launcher"][0] == "Training Launcher"
-    assert snapshot["models"][0] == "Model Manager"
+    assert snapshot["generation"][0] == "Generate From Model"
+    assert snapshot["launcher"][0] == "Train Selected Model"
+    assert snapshot["models"][0] == "Model Selection"
+    assert snapshot["utilization"][-1] == "No active training"
 
 
 def test_build_tui_snapshot_runs_panel_includes_kpi_columns(tmp_path) -> None:
@@ -105,10 +109,20 @@ def test_build_tui_snapshot_runs_panel_includes_kpi_columns(tmp_path) -> None:
         checkpoints_root=tmp_path / "checkpoints",
     )
 
-    assert "ID | status | epoch | step | loss | device | eta/remaining | gpu" in snapshot["runs"][1]
+    assert "RUN_ID | Status | Epoch | Loss | Device | ETA | GPU%" in snapshot["runs"][1]
     assert any("run-1" in row for row in snapshot["runs"])
     assert any("ETA: 2026-02-24T11:00:00Z" in line for line in snapshot["detail"])
     assert any("GPU util: 88.0" in line for line in snapshot["detail"])
+
+
+def test_run_dashboard_filters_to_active_runs_and_empty_state(tmp_path) -> None:
+    _write_run(tmp_path, run_id="done", status="completed", step=2, eta_at=None, mtime=20)
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+
+    assert snapshot["runs"][2] == "No active runs."
 
 
 def test_running_runs_are_sorted_ahead_of_newer_completed_runs(tmp_path) -> None:
@@ -149,9 +163,10 @@ def test_model_manager_marks_latest_and_propagates_active_model(tmp_path) -> Non
         active_model_run_id="run-1",
     )
 
-    assert any("latest" in line and "run-2" in line for line in snapshot["models"])
+    assert any("Latest trained model: run-2" in line for line in snapshot["models"])
     assert any("active" in line and "run-1" in line for line in snapshot["models"])
-    assert any("active model run=run-1" in line for line in snapshot["generation"])
+    assert any("Selected Model: run-1" in line for line in snapshot["generation"])
+    assert any("Selected Model: run-1" in line for line in snapshot["launcher"])
 
 
 def test_collect_model_entries_ignores_archived_dirs(tmp_path) -> None:
@@ -205,7 +220,29 @@ def test_collect_system_utilization_fallbacks_without_psutil(monkeypatch) -> Non
 
     assert metrics["gpu_utilization_pct"] is None
     assert metrics["cpu_utilization_pct"] is None
+    assert metrics["cpu_count"] is None
     assert metrics["ram_used_mb"] is None
+
+
+def test_aggregate_active_remaining_time_uses_active_runs_only(tmp_path) -> None:
+    _write_run(tmp_path, run_id="run-1", status="running", step=1, eta_at=None)
+    _write_run(tmp_path, run_id="run-2", status="paused", step=2, eta_at=None)
+    _write_run(tmp_path, run_id="run-3", status="completed", step=3, eta_at=None)
+    run2_state = tmp_path / "runs" / "run-2" / "state.json"
+    run2_data = json.loads(run2_state.read_text(encoding="utf-8"))
+    run2_data["remaining_seconds"] = 20.0
+    run2_state.write_text(json.dumps(run2_data), encoding="utf-8")
+
+    entries = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+    )
+
+    assert "Aggregate remaining: 00:00:30" in entries["utilization"][-1]
+
+
+def test_aggregate_active_remaining_time_no_active_training() -> None:
+    assert _aggregate_active_remaining_time([]) == "No active training"
 
 
 def test_tui_start_training_returns_status(monkeypatch) -> None:
@@ -323,3 +360,53 @@ def test_join_markup_safe_escapes_help_text_regression() -> None:
         render(raw_help)
     safe_help = render(_markup_safe(raw_help)).plain
     assert "epochs +/-" in safe_help
+
+
+def test_run_dashboard_scroll_window_tracks_selection(tmp_path) -> None:
+    for idx in range(15):
+        _write_run(
+            tmp_path,
+            run_id=f"run-{idx:02d}",
+            status="running",
+            step=idx,
+            eta_at="2026-02-24T11:00:00Z",
+            mtime=float(idx + 1),
+        )
+
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+        selected_index=12,
+        run_scroll_offset=0,
+    )
+
+    assert snapshot["run_scroll_offset"] > 0
+    assert any("Showing " in line for line in snapshot["runs"])
+
+
+def test_generation_output_scroll_window(tmp_path) -> None:
+    _write_checkpoint(tmp_path, "run-1", mtime=1)
+    lines = "\n".join(f"line-{idx}" for idx in range(20))
+    snapshot = build_tui_snapshot(
+        runs_root=tmp_path / "runs",
+        checkpoints_root=tmp_path / "checkpoints",
+        active_model_run_id="run-1",
+        generation_output=lines,
+        generation_scroll_offset=5,
+    )
+
+    assert "line-5" in snapshot["generation"]
+    assert any("output lines 6-" in line for line in snapshot["generation"])
+
+
+def test_tui_css_matches_two_column_three_row_spec() -> None:
+    assert "grid-size: 2 3;" in TUI_GRID_CSS
+    assert "#panel-e" in TUI_GRID_CSS
+    assert "row-span: 2;" in TUI_GRID_CSS
+    assert "border-title-align: center;" in TUI_GRID_CSS
+
+
+def test_delete_guard_blocks_running_model(tmp_path) -> None:
+    _write_run(tmp_path, run_id="run-1", status="running", step=1, eta_at=None)
+    assert _model_is_running("run-1", runs_root=tmp_path / "runs") is True
+    assert _model_is_running("missing", runs_root=tmp_path / "runs") is False

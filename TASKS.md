@@ -479,6 +479,192 @@ Use Hugging Face stack (`datasets` + tokenizer tooling) for robustness and exten
 
 ---
 
+## Task 27 — TUI Grid Refactor (2x3 Structural Layout) [done]
+**Goal:** Refactor the TUI shell to match the exact 2-column / 3-row layout specification.
+
+### Deliverables
+- Implement a 2-column grid with 3 rows:
+  - Left: Row1 Panel A, Row2 Panel C, Row3 Panel D
+  - Right: Row1 Panel B, Rows2-3 Panel E (row span)
+- Preserve responsive resizing behavior with proportional panel scaling.
+- Keep all panels bordered with centered titles.
+
+### Acceptance
+- Layout visually matches the provided specification.
+- Panel E spans rows 2 and 3 reliably.
+- Resizing terminal keeps structure intact without overlap.
+
+---
+
+## Task 28 — Panel A: Run Dashboard (Top Left) [done]
+**Goal:** Provide a scrollable active-run dashboard with training/runtime KPI columns.
+
+### Deliverables
+- Implement Panel A titled **Run Dashboard**.
+- Display rows with columns:
+  - RUN_ID, Status, Epoch, Loss, Device, ETA, GPU%
+- Support active run statuses: running/paused/finished/failed.
+- Show fallback state: `No active runs.` when empty.
+- Make the panel scrollable for many runs.
+
+### Acceptance
+- 0/1/many run scenarios render correctly.
+- Live updates refresh rows without breaking selection/scroll state.
+- Column data is stable and human-readable.
+
+---
+
+## Task 29 — Panel B: System Dashboard (Top Right) [done]
+**Goal:** Show live system utilization and aggregate remaining-time overview.
+
+### Deliverables
+- Implement Panel B titled **System Dashboard**.
+- Add GPU section:
+  - Usage %, VRAM used/total, temperature (when available)
+- Add CPU section:
+  - Usage %, core count, load average (optional if platform supports)
+- Add global remaining time for all active runs combined.
+- Fallback to `No active training` when no runs exist.
+
+### Acceptance
+- Metrics update continuously without blocking UI.
+- Works gracefully on systems missing GPU telemetry (show `n/a` where needed).
+- Aggregate remaining time logic is correct for multiple active runs.
+
+---
+
+## Task 30 — Panel C: Train Selected Model (Middle Left) [done]
+**Goal:** Add a focused training launcher tied to the active model.
+
+### Deliverables
+- Implement Panel C titled **Train Selected Model**.
+- UI elements:
+  - label: `Selected Model: <model_name>`
+  - input: epochs
+  - button: Start Training
+  - optional controls: device choice (CPU/GPU), batch size
+- On start:
+  - create a new run
+  - surface launch result/validation errors inline
+  - inject new run into Panel A immediately
+
+### Acceptance
+- Starting training from this panel works end-to-end.
+- Invalid input is blocked with clear feedback.
+- Newly started run appears in Run Dashboard without manual refresh.
+
+---
+
+## Task 31 — Panel D: Generate From Model (Bottom Left) [done]
+**Goal:** Support prompt-based generation from the currently selected model.
+
+### Deliverables
+- Implement Panel D titled **Generate From Model**.
+- UI elements:
+  - label: `Selected Model: <model_name>`
+  - input: MAX_TOKENS
+  - input: Prompt
+  - button: Generate
+  - scrollable output display area
+- On generate:
+  - run inference using selected model
+  - render output text safely in output area
+
+### Acceptance
+- Prompt → output flow works in one panel.
+- Output area is scrollable and stable for long text.
+- Missing model/invalid generation params produce clear errors.
+
+---
+
+## Task 32 — Panel E: Model Selection & Management (Right, Rows 2-3) [done]
+**Goal:** Centralize model browsing, active selection, and basic lifecycle actions.
+
+### Deliverables
+- Implement Panel E titled **Model Selection** spanning right-column rows 2 and 3.
+- Section 1: selectable model list with per-model metadata:
+  - name, trained date, epochs, final loss, disk size, status
+- Section 2: latest model summary (`Latest trained model: ...`).
+- Controls:
+  - Set as Active
+  - Delete (with confirmation)
+  - Refresh
+- On selection change, propagate active model to Panels C and D labels.
+
+### Acceptance
+- Model list handles ready/training/corrupted states cleanly.
+- Latest model indicator is always present when models exist.
+- Destructive actions require explicit confirmation and update list state.
+
+---
+
+## Task 33 — Inter-Panel State Synchronization Rules [done]
+**Goal:** Enforce deterministic data flow between all panels per spec.
+
+### Deliverables
+- Implement shared state/events so that:
+  - Panel E active model selection updates Panels C and D.
+  - Panel C training launches appear in Panel A.
+  - Training progress updates Panels A and B.
+  - System telemetry continuously updates Panel B.
+- Define clear source-of-truth boundaries for run/model/system state.
+
+### Acceptance
+- No stale cross-panel labels after selection/launch actions.
+- Update propagation works during rapid refresh cycles.
+- State remains consistent across empty/error/reload scenarios.
+
+---
+
+## Task 34 — TUI Reliability, UX Conformance, and Regression Tests (Layout Spec) [done]
+**Goal:** Harden the refactor and verify compliance with the full layout + behavior specification.
+
+### Deliverables
+- Add/extend tests for:
+  - panel placement and row-span behavior
+  - scrollability requirements (Panel A list, Panel D output)
+  - centered titles + bordered panels
+  - panel-specific empty/error states
+  - state sync rules across A/B/C/D/E
+  - markup-safe rendering for dynamic content
+- Keep validation commands green.
+
+### Acceptance
+- `ruff` + `pytest` pass with expanded coverage.
+- No regressions in core CLI/TUI runtime commands.
+- Spec-defined behavior is test-backed and reproducible.
+
+---
+
+## Review Pass — Execution Order & Scope Notes for Tasks 27-34
+
+### Recommended execution order
+1. **Task 27** (layout scaffold)  
+2. **Task 33 (partial)** shared state/event bus skeleton  
+3. **Task 28 + Task 29** monitoring surfaces (runs + system)  
+4. **Task 32** model selection/management shell  
+5. **Task 30 + Task 31** action panels (train + generate)  
+6. **Task 33 (finalize)** full inter-panel synchronization and edge-case reconciliation  
+7. **Task 34** reliability hardening + regression suite expansion
+
+### Scope clarifications
+- **Panel A data policy:** show active runs by default; optionally include finished/failed in a secondary view, but preserve `No active runs.` empty-state semantics.
+- **Panel B aggregate remaining time:** compute from active runs only; if none active, show `No active training` (not `00:00:00`).
+- **Panel E safety:** `Delete` must require explicit confirmation and should fail safely if model is currently running training.
+- **Panel C/D dependency:** both must depend on the active model source-of-truth from Panel E (single authoritative state).
+- **Markup safety:** all dynamic strings rendered in every panel must continue using safe rendering/escaping rules.
+
+### Definition of done for the full refactor block (27-34)
+- New 2x3 layout spec is met visually and functionally.
+- End-to-end workflow works in one TUI session:
+  - select model → train → see run/system updates → generate from selected model.
+- Validation remains green:
+  - `PYTHONPATH=src ./.venv/bin/ruff check .`
+  - `PYTHONPATH=src ./.venv/bin/pytest -q`
+- Coverage includes empty states, fallback telemetry, sync races, and markup regressions.
+
+---
+
 ## Stretch Tasks (After v1)
 - Gradient accumulation / mixed precision.
 - Better sampling strategies (top-p, repetition penalty).
